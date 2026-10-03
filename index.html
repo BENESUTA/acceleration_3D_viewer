@@ -33,13 +33,21 @@
 
   .readout{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px}
   .chip{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 8px;min-width:0}
+  .readout{cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .readout:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:8px}
+  .readhint{color:var(--muted);font-size:11px;margin:-2px 2px 8px}
+  .numpanel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px 10px;margin-bottom:8px}
+  .numpanel[hidden]{display:none}
+  .numpanel .np-title{font-size:12px;color:var(--muted);margin:0 0 4px}
+  .seg.wrap{flex-wrap:wrap}
+  .seg.wrap button{flex:1 1 30%;font-size:12px;padding:6px 4px}
   .chip small{display:block;color:var(--muted);font-size:11px}
   .chip b{font-variant-numeric:tabular-nums;font-size:15px;font-weight:600;white-space:nowrap}
   .chip.cx b{color:var(--x)} .chip.cy b{color:var(--y)} .chip.cz b{color:var(--z)}
   .chip.cz{border-color:#2c4a6e;background:#101e30}
 
   .stage{position:relative;height:clamp(320px,56vh,620px);border:1px solid var(--line);
-    border-radius:12px;overflow:hidden;background:#0a0e13}
+    border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,#16202c 0%,#0a0e13 78%)}
   canvas{display:block;width:100%;height:100%}
   #main{touch-action:none;cursor:grab}
   #main:active{cursor:grabbing}
@@ -54,7 +62,8 @@
   .fsbar{position:absolute;right:10px;top:58px;display:none;flex-direction:column;align-items:flex-end;gap:6px;z-index:3}
   .fsbar button{font-size:13px;padding:7px 11px;background:rgba(18,26,36,.85);min-width:96px}
   .fsread{display:none;font-variant-numeric:tabular-nums;font-size:13px;line-height:1.5;text-align:right;
-    background:rgba(10,14,19,.72);border:1px solid var(--line);border-radius:8px;padding:5px 9px;pointer-events:none}
+    background:rgba(10,14,19,.72);border:1px solid var(--line);border-radius:8px;padding:5px 9px;pointer-events:auto;cursor:pointer}
+  .fsnote{display:block;color:var(--muted);font-size:11px}
   .stage.full{position:fixed;inset:0;z-index:1000;height:auto;border-radius:0;border:0}
   .stage.full .fsbar,.stage.full .fsread{display:flex}
   .stage.full .fsread{display:block}
@@ -119,12 +128,32 @@
 
   <div class="layout">
     <section class="stage-wrap">
-      <div class="readout">
+      <div class="readout" id="readout" role="button" tabindex="0" aria-expanded="false" aria-controls="numPanel" aria-label="数値表示の設定を開く">
         <div class="chip cx"><small>X (m/s²)</small><b id="rx">0.00</b></div>
         <div class="chip cy"><small>Y (m/s²)</small><b id="ry">0.00</b></div>
         <div class="chip cz"><small>Z (m/s²)</small><b id="rz">0.00</b></div>
         <div class="chip"><small>大きさ |a|</small><b id="rm">0.00</b></div>
         <div class="chip"><small>g 換算</small><b id="rg">0.00</b></div>
+      </div>
+      <div class="readhint" id="readHint">数値部分をタップ：更新速度と数値用の移動平均を設定</div>
+      <div class="numpanel" id="numPanel" hidden>
+        <p class="np-title">更新速度</p>
+        <div class="seg wrap" id="segNumInt">
+          <button data-v="0" class="on">毎フレーム</button>
+          <button data-v="50">50 ms</button>
+          <button data-v="100">0.1 秒</button>
+          <button data-v="250">0.25 秒</button>
+          <button data-v="500">0.5 秒</button>
+          <button data-v="1000">1 秒</button>
+        </div>
+        <p class="np-title" style="margin-top:10px">数値用の移動平均（3D表示とは別）</p>
+        <label class="switch"><input type="checkbox" id="numMaOn"><span></span>数値の移動平均を有効にする</label>
+        <div class="row" id="numMaRow">
+          <input type="range" id="numMaRange" min="1" max="200" value="15" aria-label="数値用サンプル長">
+          <input type="number" id="numMaNum" min="1" max="200" value="15" inputmode="numeric" aria-label="数値用サンプル長">
+          <span>サンプル</span>
+        </div>
+        <p class="hint" id="numMaInfo"></p>
       </div>
       <div class="stage">
         <canvas id="main"></canvas>
@@ -135,6 +164,7 @@
           <button id="fsGrav"></button>
           <button id="fsView"></button>
           <button id="fsMa"></button>
+          <button id="fsNumMa"></button>
           <div class="fsread" id="fsRead"></div>
         </div>
         <div class="zoombtns">
@@ -252,7 +282,7 @@
         <p><b>センサー出力は慣性力</b>です。端末が加速した向きと逆向きに感じる力で、動かした向きと矢印は逆になります。<b>重力あり</b>は慣性力に重力（下向き 9.8 m/s²）を加えた値で、静止すると下向きに約 9.8 が出ます。<b>なし</b>は重力を除いた慣性力だけです。</p>
         <p><b>Z軸の情報</b>は、色・矢じりの大きさ、床への垂線、3面図（真上・正面・横）、右端のZゲージ、時系列グラフで補います。3面図では各図の見えない軸の値を色と数値で示します。</p>
         <p><b>移動平均</b>は座標系・重力の処理後の値を直近 N サンプルで平均します。</p>
-        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）で、長さは実際の重力加速度（9.8 m/s²）です。点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。OSの向き情報は端末ごとのずれ（iPadは横向きが標準で、向きの数え方も逆）を重力から学習して補正します。手動の角度は表示向き（OSの向き）に対する相対補正なので、一度合わせれば縦横どちらでも正しい向きになります（追従オフのときは固定角になります）。</p>
+        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）で、長さは実際の重力加速度（9.8 m/s²）です。点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。OSの向き情報は、iPadが横向き標準で向きの数え方も逆な点を補正して使います。画面の向きは毎回その時点の値から計算するので、以前の向きは引き継ぎません。手動の角度は表示向き（OSの向き）に対する相対補正なので、一度合わせれば縦横どちらでも正しい向きになります（追従オフのときは固定角になります）。</p>
         <p><b>断面円</b>は、半径 |a| の球を画面の平面（XY）で切った円です。矢印の先端が円の内側にあるほどZ成分が大きく、円上ならZ≈0です。Zが正なら実線、負なら破線になります。</p>
       </details>
     </aside>
@@ -286,6 +316,8 @@ const S = {
   fp: false, auto: false, outline: true, down: true, follow: true, circle: true
 };
 let lastScale = 1;
+S.numInt = 0; S.numMa = false; S.numN = 15;   // 数値表示の更新間隔(ms, 0=毎フレーム)と、数値専用の移動平均
+let numBuf = [], numCur = [0, 0, 0], lastNum = 0;
 S.angMode = 'os';
 let gAng = null, gxy = [0, 0];   // 重力から推定した画面回転(0/90/180/270°)
 
@@ -308,7 +340,7 @@ let cur = [0,0,G], raw = [0,0,G];
 let rate = 60, lastT = 0, gotSensor = 0;
 
 function resetData() {
-  buf = []; trail = []; hist = [];
+  buf = []; trail = []; hist = []; numBuf = [];
   lastT = 0;
   demoClock = performance.now();
 }
@@ -317,6 +349,10 @@ function ingest(t, linD, inclD) {
   const base = S.gravity ? inclD : linD;
   const out = S.frame === 'inertial' ? apply(R, base) : base.slice();
   raw = out;
+  numBuf.push(out);                 // 数値表示用の移動平均 (3D表示のものとは別)
+  const NN = S.numMa ? S.numN : 1;
+  while (numBuf.length > Math.max(NN, 1)) numBuf.shift();
+  { let a = 0, b = 0, c2 = 0; for (const v of numBuf) { a += v[0]; b += v[1]; c2 += v[2]; } const m = numBuf.length; numCur = [a/m, b/m, c2/m]; }
   buf.push(out);
   const N = S.ma ? S.maN : 1;
   while (buf.length > Math.max(N, 1)) buf.shift();
@@ -353,6 +389,7 @@ let listening = false;
 function onOri(e) {
   if (e.alpha == null && e.beta == null && e.gamma == null) return;
   ori = {a: e.alpha || 0, b: e.beta || 0, g: e.gamma || 0, ok: true};
+  if (S.source === 'sensor') R = rotFromEuler(ori.a, ori.b, ori.g);   // 動きイベントを待たず即反映
 }
 // センサー出力は「慣性力」(端末が加速した向きと逆向きに感じる力)。重力込みでは静止時に重力が下向きに出る (= −加速度 + 重力)。
 // iOSはこの向きで出力する。AndroidなどW3C仕様どおりの端末は逆符号(加速度そのもの・静止時に重力が上向き)なので、
@@ -416,7 +453,7 @@ async function setSource(v) {
     window.addEventListener('deviceorientation', onOri);
     listening = true;
   }
-  S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; resetOsLearn(); gxy = [0, 0]; autoSign = 1; signEma = 0; resetData();
+  S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; gxy = [0, 0]; autoSign = 1; signEma = 0; resetData();
   srcHint('端末を動かしてみてください。センサー出力は慣性力として扱います（静止時に重力が下向きに出る符号）。逆になる端末は「センサー符号」を自動判定か反転にしてください。');
 }
 
@@ -427,31 +464,12 @@ function osAngle() {
   else if (typeof window.orientation === 'number') a = window.orientation;
   return a * Math.PI / 180;
 }
-// OSの向き情報(osAngle)から画面回転を得る式: 回転 = k×OS角 + off。
-// iPadは横向きが標準で、実機ではk=-1, off=90°(縦=OS90°→0°, 横(ホーム右)=OS0°→90°)。iPhoneはk=+1, off=0。
-// 学習前は上の既定値を使い、重力から推定した向きと突き合わせて端末ごとに学習する
+// OSの向き情報(osAngle)から画面回転を得る式: 回転 = k×OS角 + off (毎回その時点の値から計算し、学習・保持はしない)
+// iPadは横向きが標準で向きの数え方も逆: k=-1, off=90° (縦=OS90°→0°, 横(ホーム右)=OS0°→90°)。iPhoneは k=+1, off=0
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const defK = isIPad ? -1 : 1, defOff = isIPad ? Math.PI / 2 : 0;
-let osK = null, osOff = null, gStable = 0, gLast = null;
-const osMap = {};
 const q4 = r => (((Math.round(r / (Math.PI / 2))) % 4) + 4) % 4;
-const osAngleFixed = () => (osK !== null ? osK : defK) * osAngle() + (osOff !== null ? osOff : defOff);
-function resetOsLearn() { osK = null; osOff = null; gStable = 0; gLast = null; for (const k of Object.keys(osMap)) delete osMap[k]; }
-function learnOs() {
-  if (gAng === null) return;
-  if (gAng === gLast) gStable++; else { gLast = gAng; gStable = 0; return; }
-  if (gStable !== 30) return;                           // 重力推定が約0.5秒安定したときだけ学習
-  const o = q4(osAngle()), g = q4(gAng);
-  osMap[o] = g;
-  const keys = Object.keys(osMap).map(Number);
-  for (const k of [defK, -defK]) {                      // 全ての記録と矛盾しない (k, off) を探す
-    for (let off = 0; off < 4; off++) {
-      if (keys.every(o2 => (((k * o2 + off) % 4) + 4) % 4 === osMap[o2])) { osK = k; osOff = off * Math.PI / 2; return; }
-    }
-  }
-  for (const key of keys) delete osMap[key];            // 矛盾したら最新の1点だけで作り直す
-  osMap[o] = g; osK = defK; osOff = ((((g - defK * o) % 4) + 4) % 4) * Math.PI / 2;
-}
+const osAngleFixed = () => defK * osAngle() + defOff;
 function screenAngle() {
   const m = S.angMode;
   if (m !== 'auto' && m !== 'os') {                              // 手動: 表示向き(OS基準)に対する相対補正
@@ -459,17 +477,14 @@ function screenAngle() {
     return S.follow ? osAngleFixed() + man : man;                // 追従オフのときは固定角として適用
   }
   if (!S.follow) return 0;
-  if (m === 'auto' && S.source === 'sensor' && gAng !== null) return gAng;
+  if (m === 'auto' && S.source === 'sensor' && gAng !== null) return gAng;   // 水平で決められないときはOSの向き
   return osAngleFixed();
 }
-// 加速度計が示す「上」の向き(端末XY平面内)から、画面の上下に合わせる回転角を90°単位で推定する
-function updateGravAngle(I) {
-  gxy[0] += (I[0] - gxy[0]) * 0.15; gxy[1] += (I[1] - gxy[1]) * 0.15;
-  if (Math.hypot(gxy[0], gxy[1]) < 4) return;            // 水平に近いときは更新しない
-  const need = Math.PI / 2 - Math.atan2(gxy[1], gxy[0]);
-  const q = Math.round(need / (Math.PI / 2));
-  if (Math.abs(angDiff(need, q * Math.PI / 2)) < 0.61) gAng = (((q % 4) + 4) % 4) * Math.PI / 2;   // 約35°以内で確定(ヒステリシス)
-  learnOs();
+// 「上」の向き(端末XY平面)から画面の回転角を毎回求める。前回の値には依存しない
+function updateGravAngle(up) {
+  gxy[0] += (up[0] - gxy[0]) * 0.3; gxy[1] += (up[1] - gxy[1]) * 0.3;
+  if (Math.hypot(gxy[0], gxy[1]) < 4) { gAng = null; return; }
+  gAng = q4(Math.PI / 2 - Math.atan2(gxy[1], gxy[0])) * Math.PI / 2;
 }
 const fpInertial = () => S.fp && S.frame === 'inertial';
 const depthOf = v => fpInertial() ? applyT(R, v)[2] : v[2];   // 画面の奥行き成分
@@ -524,22 +539,30 @@ function label(c, text, x, y, color, size = 12) {
   c.lineWidth = 3; c.strokeStyle = 'rgba(8,12,17,.9)'; c.lineJoin = 'round';
   c.strokeText(text, x, y); c.fillStyle = color; c.fillText(text, x, y);
 }
+const sizeCache = new Map();           // 毎フレームのレイアウト計算(getBoundingClientRect)を避ける
 function fit(cv) {
-  const r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2);
-  const w = Math.max(1, Math.round(r.width * d)), h = Math.max(1, Math.round(r.height * d));
-  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
-  return {W: r.width, H: r.height, d};
+  let z = sizeCache.get(cv);
+  if (!z) {
+    const r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2);
+    z = {w: r.width, h: r.height, d, bw: Math.max(1, Math.round(r.width * d)), bh: Math.max(1, Math.round(r.height * d))};
+    sizeCache.set(cv, z);
+    if (cv.width !== z.bw || cv.height !== z.bh) { cv.width = z.bw; cv.height = z.bh; }
+  }
+  return {W: z.w, H: z.h, d: z.d};
 }
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(es => { for (const en of es) sizeCache.delete(en.target); });
+  document.querySelectorAll('canvas').forEach(cv => ro.observe(cv));
+}
+window.addEventListener('resize', () => sizeCache.clear());
 const showRaw = () => S.ma && S.maN > 1 && S.ghost;
 
 /* ---------- 主画面 ---------- */
-const mc = $('main'), mctx = mc.getContext('2d');
+const mc = $('main'), mctx = mc.getContext('2d', {desynchronized: true});
 function drawMain() {
   const {W, H, d} = fit(mc), c = mctx;
   c.setTransform(d, 0, 0, d, 0, 0);
-  const bg = c.createRadialGradient(W/2, H/2, 10, W/2, H/2, Math.max(W, H) * 0.7);
-  bg.addColorStop(0, '#16202c'); bg.addColorStop(1, '#0a0e13');
-  c.fillStyle = bg; c.fillRect(0, 0, W, H);
+  c.clearRect(0, 0, W, H);            // 背景のグラデーションはCSS側
 
   const scale = S.zoom * baseScale(Math.min(W - 40, H));
   lastScale = scale;
@@ -569,10 +592,11 @@ function drawMain() {
     c.beginPath(); line([0,0,0], pos); c.globalAlpha = .9; c.lineWidth = 1.6; c.stroke(); c.globalAlpha = 1;
     const lp = P(e.map(v => v * (E + 1.6)));
     label(c, ['X','Y','Z'][a], lp[0] - 4, lp[1] + 4, AXC[a], 13);
+    c.font = '10px system-ui,sans-serif'; c.fillStyle = AXC[a];
     for (let k = -nK; k <= nK; k++) {
       if (!k) continue;
       const v = k * step, tp = P(e.map(q => q * v));
-      c.globalAlpha = .65; c.fillStyle = AXC[a]; c.font = '10px system-ui,sans-serif';
+      c.globalAlpha = .65;
       c.fillText(String(+v.toFixed(1)), tp[0] + 4, tp[1] - 3);
     }
     c.globalAlpha = 1;
@@ -613,7 +637,7 @@ function drawMain() {
   if (S.trail && trail.length > 1) {  // 軌跡
     c.lineWidth = 1.8; c.lineCap = 'round';
     let pp = P(trail[0]);
-    for (let i = 1; i < trail.length; i++) {
+    for (let i = 2; i < trail.length; i += 2) {
       const q = P(trail[i]);
       c.strokeStyle = col(depthOf(trail[i]), (i / trail.length) * .8);
       c.beginPath(); c.moveTo(pp[0], pp[1]); c.lineTo(q[0], q[1]); c.stroke(); pp = q;
@@ -670,7 +694,7 @@ function drawMain() {
 
 /* ---------- 3面図 ---------- */
 function drawMini(cv, h, v, hid, title, hint) {
-  const {W, H, d} = fit(cv), c = cv.getContext('2d');
+  const {W, H, d} = fit(cv), c = cv.getContext('2d', {alpha: false});
   c.setTransform(d, 0, 0, d, 0, 0);
   c.fillStyle = '#0d131b'; c.fillRect(0, 0, W, H);
   const scale = S.zoom * baseScale(Math.min(W, H)), cx = W / 2, cy = H / 2;
@@ -719,7 +743,7 @@ function drawMini(cv, h, v, hid, title, hint) {
 /* ---------- 時系列 ---------- */
 const cc = $('chart');
 function drawChart() {
-  const {W, H, d} = fit(cc), c = cc.getContext('2d');
+  const {W, H, d} = fit(cc), c = cc.getContext('2d', {alpha: false});
   c.setTransform(d, 0, 0, d, 0, 0);
   c.fillStyle = '#0d131b'; c.fillRect(0, 0, W, H);
   const L = 34, tEnd = hist.length ? hist[hist.length - 1].t : performance.now();
@@ -771,18 +795,20 @@ function updateTexts() {
   $('fsFrame').textContent = S.frame === 'inertial' ? '慣性系' : '非慣性系';
   $('fsGrav').textContent = '重力' + (S.gravity ? 'あり' : 'なし');
   $('fsView').textContent = S.fp ? '一人称' : '自由視点';
-  $('fsMa').textContent = '移動平均 ' + (S.ma ? S.maN : '切');
+  $('fsMa').textContent = '3D平均 ' + (S.ma ? S.maN : '切');
+  $('fsNumMa').textContent = S.ma ? '数値平均 3D連動' : '数値平均 ' + (S.numMa ? S.numN : '切');
+  $('numMaRow').classList.toggle('dim', S.ma || !S.numMa);
   $('views').classList.toggle('dim', S.fp);
   $('follow').closest('label').classList.toggle('dim', !S.fp);
   $('angRow').classList.toggle('dim', !S.fp);
 }
 function updateMaInfo() {
   const ms = S.maN / Math.max(rate, 1) * 1000;
-  $('maInfo').textContent = S.ma
+  setT('maInfo', S.ma
     ? `直近 ${S.maN} サンプルを平均 (約 ${ms.toFixed(0)} ms ／ 現在 ${rate.toFixed(0)} Hz)`
-    : '無効：生の値をそのまま表示します。';
+    : '無効：生の値をそのまま表示します。');
 }
-function clearCalc() { buf = []; trail = []; }
+function clearCalc() { buf = []; trail = []; numBuf = []; }
 
 seg('segSource', v => setSource(v));
 seg('segFrame', v => { S.frame = v; clearCalc(); updateTexts(); });
@@ -797,7 +823,7 @@ $('angMode').onchange = e => { S.angMode = e.target.value; };
 $('circle').onchange = e => { S.circle = e.target.checked; };
 $('outline').onchange = e => { S.outline = e.target.checked; };
 $('down').onchange = e => { S.down = e.target.checked; };
-$('signMode').onchange = e => { S.signMode = e.target.value; clearCalc(); gAng = null; resetOsLearn(); };
+$('signMode').onchange = e => { S.signMode = e.target.value; clearCalc(); gAng = null; };
 $('maOn').onchange = e => { S.ma = e.target.checked; updateTexts(); updateMaInfo(); };
 function setMaN(v) {
   v = Math.max(1, Math.min(200, Math.round(+v) || 1));
@@ -881,11 +907,39 @@ $('fsFrame').onclick = () => pick('segFrame', S.frame === 'inertial' ? 'body' : 
 $('fsGrav').onclick = () => pick('segGravity', S.gravity ? 'off' : 'on');
 $('fsView').onclick = () => pick('segView', S.fp ? 'free' : 'fp');
 $('fsMa').onclick = () => $('maOn').click();
+$('fsNumMa').onclick = () => $('numMaOn').click();
+
+/* ---------- 数値表示の設定 (数値部分をタップ) ---------- */
+const NUM_INTS = [0, 50, 100, 250, 500, 1000];
+const numIntLabel = () => S.numInt === 0 ? '毎フレーム' : (S.numInt < 100 ? S.numInt + ' ms' : (S.numInt / 1000) + ' 秒');
+function setNumInt(v) { S.numInt = v; lastNum = 0; setSeg('segNumInt', String(v)); }
+function toggleNumPanel() {
+  const p = $('numPanel'), open = p.hasAttribute('hidden');
+  if (open) p.removeAttribute('hidden'); else p.setAttribute('hidden', '');
+  $('readout').setAttribute('aria-expanded', String(open));
+  $('readHint').textContent = open ? '数値部分をタップで設定を閉じる' : '数値部分をタップ：更新速度と数値用の移動平均を設定';
+}
+$('readout').addEventListener('click', toggleNumPanel);
+$('readout').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNumPanel(); } });
+seg('segNumInt', v => setNumInt(+v));
+$('fsRead').addEventListener('click', () => setNumInt(NUM_INTS[(NUM_INTS.indexOf(S.numInt) + 1) % NUM_INTS.length]));   // 全画面中はタップで更新速度を順に切替
+$('numMaOn').onchange = e => { S.numMa = e.target.checked; numBuf = []; updateTexts(); };
+function setNumN(v) {
+  v = Math.max(1, Math.min(200, Math.round(+v) || 1));
+  S.numN = v; $('numMaRange').value = v; $('numMaNum').value = v; updateTexts();
+}
+$('numMaRange').oninput = e => setNumN(e.target.value);
+$('numMaNum').onchange = e => setNumN(e.target.value);
+$('numMaRow').classList.add('dim');
 
 /* ---------- ループ ---------- */
-let last = performance.now(), acc = 0, frameNo = 0;
+let last = performance.now(), acc = 0, frameNo = 0, ftAvg = 16;
+const tcache = {};
+function setT(id, t) { if (tcache[id] !== t) { tcache[id] = t; $(id).textContent = t; } }
 function loop(now) {
-  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  const rawDt = now - last, dt = Math.min(0.1, rawDt / 1000); last = now;
+  ftAvg += (Math.min(rawDt, 100) - ftAvg) * 0.1;
+  frameNo++;
   if (S.source === 'demo') {
     acc += dt;
     while (acc >= 1 / 60) { demoStep(); acc -= 1 / 60; }
@@ -895,30 +949,39 @@ function loop(now) {
     S.yaw += dy * 0.18; S.pitch += dp * 0.18;
     if (Math.abs(dy) < 0.002 && Math.abs(dp) < 0.002) { S.yaw = tween.yaw; S.pitch = tween.pitch; tween = null; }
   }
-  updateAuto();
-  drawMain();
-  drawMini($('mTop'), 0, 1, 2, '真上 (XY)', 'Z:+が手前');
-  drawMini($('mFront'), 0, 2, 1, '正面 (XZ)', 'Y:+が奥');
-  drawMini($('mSide'), 1, 2, 0, '横 (YZ)', 'X:+が手前');
-  drawChart();
-  if (++frameNo % 6 === 0) {
-    $('rx').textContent = fmt(cur[0]); $('ry').textContent = fmt(cur[1]); $('rz').textContent = fmt(cur[2]);
-    const mag = Math.hypot(cur[0], cur[1], cur[2]);
-    if (isFull) $('fsRead').innerHTML = `X ${fmt(cur[0])}<br>Y ${fmt(cur[1])}<br>Z ${fmt(cur[2])}<br>|a| ${mag.toFixed(2)}`;
-    $('rm').textContent = mag.toFixed(2); $('rg').textContent = (mag / G).toFixed(2) + ' g';
-    updateMaInfo();
-    {
-      const nz = r => (((Math.round(r * 180 / Math.PI)) % 360) + 360) % 360;
-      $('angInfo').textContent = S.fp
-        ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° → 補正後 ${nz(osAngleFixed())}° ／ 重力推定 ${gAng === null ? '—' : nz(gAng) + '°'}`
-        : '';
+  if (frameNo % 4 === 0) updateAuto();
+  drawMain();                                            // 主画面は毎フレーム最新の値で描く
+  const lite = ftAvg > 24;                               // 負荷が高いときは副画面を間引いて主画面の遅延を防ぐ
+  if (!isFull && (!lite || frameNo % 2 === 0)) {
+    drawMini($('mTop'), 0, 1, 2, '真上 (XY)', 'Z:+が手前');
+    drawMini($('mFront'), 0, 2, 1, '正面 (XZ)', 'Y:+が奥');
+    drawMini($('mSide'), 1, 2, 0, '横 (YZ)', 'X:+が手前');
+    drawChart();
+  }
+  if (S.numInt === 0 || now - lastNum >= S.numInt) {   // 数値表示: 更新間隔は設定による(既定は毎フレーム)。値は数値専用の移動平均
+    lastNum = now;
+    const v = S.ma ? cur : numCur, mag = Math.hypot(v[0], v[1], v[2]);   // 3Dで移動平均が有効なら3Dの値に合わせる
+    setT('rx', fmt(v[0])); setT('ry', fmt(v[1])); setT('rz', fmt(v[2]));
+    setT('rm', mag.toFixed(2)); setT('rg', (mag / G).toFixed(2) + ' g');
+    if (isFull) {
+      const h = `X ${fmt(v[0])}<br>Y ${fmt(v[1])}<br>Z ${fmt(v[2])}<br>|a| ${mag.toFixed(2)}<span class="fsnote">更新 ${numIntLabel()} ／ 平均 ${S.ma ? '3Dに連動(' + S.maN + ')' : (S.numMa ? S.numN : '切')}<br>タップで更新速度を切替</span>`;
+      if (tcache.fsRead !== h) { tcache.fsRead = h; $('fsRead').innerHTML = h; }
     }
-    $('signInfo').textContent = S.source === 'sensor' ? `重力の向きの一致度 ${signEma.toFixed(2)}（+1で慣性力の向き）→ ${(S.signMode === 'flip' || (S.signMode === 'auto' && autoSign < 0)) ? '反転して使用' : 'そのまま使用'}` : '';
-    $('scaleInfo').textContent = `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`;
-    const st = $('status'), tx = $('statusText');
-    if (S.source === 'demo') { st.classList.add('live'); tx.textContent = 'デモ ' + rate.toFixed(0) + ' Hz'; }
-    else if (gotSensor && performance.now() - gotSensor < 1500) { st.classList.add('live'); tx.textContent = 'センサー受信中 ' + rate.toFixed(0) + ' Hz'; }
-    else { st.classList.remove('live'); tx.textContent = 'センサー信号なし (PCではデモを使用)'; }
+  }
+  {
+    const ms = S.maN / Math.max(rate, 1) * 1000;
+    setT('numMaInfo', S.ma ? `3Dの移動平均が有効なため、数値も3Dに合わせて直近 ${S.maN} サンプルの平均を表示中（ここでの設定は3Dが無効のときに使われます）。` : S.numMa ? `直近 ${S.numN} サンプルを平均 (約 ${(S.numN / Math.max(rate, 1) * 1000).toFixed(0)} ms)。3D表示の平均とは独立です。` : '無効：数値は生の値をそのまま表示します。');
+    setT('maInfo', S.ma ? `直近 ${S.maN} サンプルを平均 (約 ${ms.toFixed(0)} ms ／ 現在 ${rate.toFixed(0)} Hz)` : '無効：生の値をそのまま表示します。');
+    const nz = r => (((Math.round(r * 180 / Math.PI)) % 360) + 360) % 360;
+    setT('angInfo', S.fp
+      ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° → 補正後 ${nz(osAngleFixed())}° ／ 重力推定 ${gAng === null ? '—(水平)' : nz(gAng) + '°'}`
+      : '');
+    setT('signInfo', S.source === 'sensor' ? `重力の向きの一致度 ${signEma.toFixed(2)}（+1で慣性力の向き）→ ${(S.signMode === 'flip' || (S.signMode === 'auto' && autoSign < 0)) ? '反転して使用' : 'そのまま使用'}` : '');
+    setT('scaleInfo', `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`);
+    const st = $('status');
+    if (S.source === 'demo') { st.classList.add('live'); setT('statusText', 'デモ ' + rate.toFixed(0) + ' Hz'); }
+    else if (gotSensor && performance.now() - gotSensor < 1500) { st.classList.add('live'); setT('statusText', 'センサー受信中 ' + rate.toFixed(0) + ' Hz'); }
+    else { st.classList.remove('live'); setT('statusText', 'センサー信号なし (PCではデモを使用)'); }
   }
   requestAnimationFrame(loop);
 }
