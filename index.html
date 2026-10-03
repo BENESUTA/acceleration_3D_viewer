@@ -49,6 +49,20 @@
   .zoombtns{position:absolute;left:10px;bottom:10px;display:flex;gap:6px}
   .zoombtns button{width:36px;height:36px;font-size:18px;line-height:1}
   .zoombtns button.on{background:var(--acc);color:#05231f;border-color:var(--acc)}
+  #fsBtn{position:absolute;right:10px;top:10px;width:40px;height:40px;font-size:18px;line-height:1;padding:0;
+    background:rgba(18,26,36,.85);z-index:3}
+  .fsbar{position:absolute;right:10px;top:58px;display:none;flex-direction:column;align-items:flex-end;gap:6px;z-index:3}
+  .fsbar button{font-size:13px;padding:7px 11px;background:rgba(18,26,36,.85);min-width:96px}
+  .fsread{display:none;font-variant-numeric:tabular-nums;font-size:13px;line-height:1.5;text-align:right;
+    background:rgba(10,14,19,.72);border:1px solid var(--line);border-radius:8px;padding:5px 9px;pointer-events:none}
+  .stage.full{position:fixed;inset:0;z-index:1000;height:auto;border-radius:0;border:0}
+  .stage.full .fsbar,.stage.full .fsread{display:flex}
+  .stage.full .fsread{display:block}
+  .stage.full #fsBtn{top:calc(10px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right))}
+  .stage.full .fsbar{top:calc(58px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right))}
+  .stage.full .tag{top:calc(10px + env(safe-area-inset-top));left:calc(10px + env(safe-area-inset-left));max-width:calc(100% - 80px)}
+  .stage.full .zoombtns{left:calc(10px + env(safe-area-inset-left));bottom:calc(10px + env(safe-area-inset-bottom))}
+  html.lock,html.lock body{overflow:hidden}
   .guide{position:absolute;right:56px;bottom:8px;font-size:11px;color:var(--muted);pointer-events:none;text-align:right}
 
   button{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);
@@ -114,6 +128,14 @@
       <div class="stage">
         <canvas id="main"></canvas>
         <div class="tag" id="tag"></div>
+        <button id="fsBtn" aria-label="全画面表示" title="全画面表示">⛶</button>
+        <div class="fsbar">
+          <button id="fsFrame"></button>
+          <button id="fsGrav"></button>
+          <button id="fsView"></button>
+          <button id="fsMa"></button>
+          <div class="fsread" id="fsRead"></div>
+        </div>
         <div class="zoombtns">
           <button id="zin" aria-label="拡大">＋</button>
           <button id="zout" aria-label="縮小">－</button>
@@ -654,6 +676,10 @@ function updateTexts() {
     ? 'カメラを端末に固定。画面の右=x・上=y・手前=z がセンサー軸と一致します。' + (S.frame === 'inertial' ? '慣性系では床グリッドと世界軸が端末の傾きに合わせて回ります。' : '')
     : 'ドラッグで自由に視点を回せます。';
   $('guide').textContent = S.fp ? 'ホイール・ピンチで拡大縮小（視点は端末に固定）' : 'ドラッグで回転 ／ ホイール・ピンチで拡大縮小 ／ ダブルタップでリセット';
+  $('fsFrame').textContent = S.frame === 'inertial' ? '慣性系' : '非慣性系';
+  $('fsGrav').textContent = '重力' + (S.gravity ? 'あり' : 'なし');
+  $('fsView').textContent = S.fp ? '一人称' : '自由視点';
+  $('fsMa').textContent = '移動平均 ' + (S.ma ? S.maN : '切');
   $('views').classList.toggle('dim', S.fp);
   $('follow').closest('label').classList.toggle('dim', !S.fp);
 }
@@ -731,6 +757,36 @@ mc.addEventListener('pointerup', endPtr); mc.addEventListener('pointercancel', e
 mc.addEventListener('wheel', e => { e.preventDefault(); setZoom(S.zoom * Math.exp(-e.deltaY * 0.0015)); }, {passive: false});
 mc.addEventListener('dblclick', () => { setZoom(1); tween = {yaw: VIEWS.iso[0], pitch: VIEWS.iso[1]}; });
 
+/* ---------- 全画面表示 ---------- */
+const stageEl = document.querySelector('.stage');
+let isFull = false;
+async function setFull(v) {
+  isFull = v;
+  stageEl.classList.toggle('full', v);
+  document.documentElement.classList.toggle('lock', v);
+  $('fsBtn').textContent = v ? '✕' : '⛶';
+  $('fsBtn').setAttribute('aria-label', v ? '全画面を終了' : '全画面表示');
+  try {   // 対応ブラウザではブラウザUIも隠す。非対応(iPhone等)でも画面いっぱい表示になる
+    if (v) {
+      const f = stageEl.requestFullscreen || stageEl.webkitRequestFullscreen;
+      if (f) await f.call(stageEl);
+    } else if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    }
+  } catch (err) {}
+}
+const onFsChange = () => { if (isFull && !document.fullscreenElement && !document.webkitFullscreenElement && fsNative) setFull(false); };
+let fsNative = false;
+document.addEventListener('fullscreenchange', () => { fsNative = fsNative || !!document.fullscreenElement; onFsChange(); });
+document.addEventListener('webkitfullscreenchange', () => { fsNative = fsNative || !!document.webkitFullscreenElement; onFsChange(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && isFull) setFull(false); });
+$('fsBtn').onclick = () => { fsNative = false; setFull(!isFull); };
+const pick = (id, v) => $(id).querySelector(`button[data-v="${v}"]`).click();
+$('fsFrame').onclick = () => pick('segFrame', S.frame === 'inertial' ? 'body' : 'inertial');
+$('fsGrav').onclick = () => pick('segGravity', S.gravity ? 'off' : 'on');
+$('fsView').onclick = () => pick('segView', S.fp ? 'free' : 'fp');
+$('fsMa').onclick = () => $('maOn').click();
+
 /* ---------- ループ ---------- */
 let last = performance.now(), acc = 0, frameNo = 0;
 function loop(now) {
@@ -753,6 +809,7 @@ function loop(now) {
   if (++frameNo % 6 === 0) {
     $('rx').textContent = fmt(cur[0]); $('ry').textContent = fmt(cur[1]); $('rz').textContent = fmt(cur[2]);
     const mag = Math.hypot(cur[0], cur[1], cur[2]);
+    if (isFull) $('fsRead').innerHTML = `X ${fmt(cur[0])}<br>Y ${fmt(cur[1])}<br>Z ${fmt(cur[2])}<br>|a| ${mag.toFixed(2)}`;
     $('rm').textContent = mag.toFixed(2); $('rg').textContent = (mag / G).toFixed(2) + ' g';
     updateMaInfo();
     $('scaleInfo').textContent = `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`;
