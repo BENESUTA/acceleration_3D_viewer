@@ -244,7 +244,7 @@
         <p><b>重力あり</b>は加速度計の読み値そのもの。静止していると、重力に抗する力として上向きに約 +9.8 が出ます。<b>なし</b>は重力成分を除いた純粋な動きの加速度です。</p>
         <p><b>Z軸の情報</b>は、色・矢じりの大きさ、床への垂線、3面図（真上・正面・横）、右端のZゲージ、時系列グラフで補います。3面図では各図の見えない軸の値を色と数値で示します。</p>
         <p><b>移動平均</b>は座標系・重力の処理後の値を直近 N サンプルで平均します。</p>
-        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。合わない場合は「OSの向き情報」や手動の角度を選んでください。</p>
+        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。OSの向き情報は端末ごとのずれ（iPadは横向きが標準で90°ずれる）を重力から学習して補正します。手動の角度は「追従」のオン/オフに関係なく適用されます。</p>
         <p><b>断面円</b>は、半径 |a| の球を画面の平面（XY）で切った円です。矢印の先端が円の内側にあるほどZ成分が大きく、円上ならZ≈0です。Zが正なら実線、負なら破線になります。</p>
       </details>
     </aside>
@@ -388,7 +388,7 @@ async function setSource(v) {
     window.addEventListener('deviceorientation', onOri);
     listening = true;
   }
-  S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; gxy = [0, 0]; resetData();
+  S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; osOff = null; gxy = [0, 0]; resetData();
   srcHint('端末を動かしてみてください。Z（画面手前）の向きが逆なら「符号を反転」を試してください。');
 }
 
@@ -399,11 +399,17 @@ function osAngle() {
   else if (typeof window.orientation === 'number') a = window.orientation;
   return a * Math.PI / 180;
 }
+// iPadは横向きが標準で、OSの向き情報がiPhoneと90°ずれる。端末ごとのずれは重力から学習し、学習前はiPadなら+90°を仮定する
+const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let osOff = null;
+const osOffset = () => osOff !== null ? osOff : (isIPad ? Math.PI / 2 : 0);
+const osAngleFixed = () => osAngle() + osOffset();
 function screenAngle() {
   const m = S.angMode;
-  if (m === 'os') return osAngle();
-  if (m === 'auto') return (S.source === 'sensor' && gAng !== null) ? gAng : osAngle();
-  return (+m) * Math.PI / 180;
+  if (m !== 'auto' && m !== 'os') return (+m) * Math.PI / 180;   // 手動角度は追従のオン/オフに関係なく適用
+  if (!S.follow) return 0;
+  if (m === 'auto' && S.source === 'sensor' && gAng !== null) return gAng;
+  return osAngleFixed();
 }
 // 加速度計が示す「上」の向き(端末XY平面内)から、画面の上下に合わせる回転角を90°単位で推定する
 function updateGravAngle(I) {
@@ -412,6 +418,7 @@ function updateGravAngle(I) {
   const need = Math.PI / 2 - Math.atan2(gxy[1], gxy[0]);
   const q = Math.round(need / (Math.PI / 2));
   if (Math.abs(angDiff(need, q * Math.PI / 2)) < 0.61) gAng = (((q % 4) + 4) % 4) * Math.PI / 2;   // 約35°以内で確定(ヒステリシス)
+    osOff = (((Math.round((gAng - osAngle()) / (Math.PI / 2)) % 4) + 4) % 4) * Math.PI / 2;   // OS情報とのずれを学習
 }
 const fpInertial = () => S.fp && S.frame === 'inertial';
 const depthOf = v => fpInertial() ? applyT(R, v)[2] : v[2];   // 画面の奥行き成分
@@ -429,7 +436,7 @@ const baseScale = size => S.auto ? size / 2 * 0.72 / autoR : size / 32;
 function makeProj(cx, cy, scale) {
   const fp = S.fp, rot = fpInertial();
   const yaw = fp ? 0 : S.yaw, pitch = fp ? Math.PI / 2 : S.pitch;   // 一人称: 端末の+z側から原点を見る
-  const sAng = fp && S.follow ? screenAngle() : 0, cs2 = Math.cos(sAng), ss2 = Math.sin(sAng);
+  const sAng = fp ? screenAngle() : 0, cs2 = Math.cos(sAng), ss2 = Math.sin(sAng);
   const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), D = 45;
   return p => {
     if (rot) p = applyT(R, p);                                       // 世界系→端末系 (カメラを端末に固定)
@@ -714,7 +721,7 @@ function updateTexts() {
   $('fsMa').textContent = '移動平均 ' + (S.ma ? S.maN : '切');
   $('views').classList.toggle('dim', S.fp);
   $('follow').closest('label').classList.toggle('dim', !S.fp);
-  $('angRow').classList.toggle('dim', !S.fp || !S.follow);
+  $('angRow').classList.toggle('dim', !S.fp);
 }
 function updateMaInfo() {
   const ms = S.maN / Math.max(rate, 1) * 1000;
@@ -847,9 +854,9 @@ function loop(now) {
     $('rm').textContent = mag.toFixed(2); $('rg').textContent = (mag / G).toFixed(2) + ' g';
     updateMaInfo();
     {
-      const dg = r => Math.round(r * 180 / Math.PI * 1) % 360, nz = r => ((dg(r) % 360) + 360) % 360;
-      $('angInfo').textContent = S.fp && S.follow
-        ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° ／ 重力推定 ${gAng === null ? '—' : nz(gAng) + '°'}`.replace('°°', '°')
+      const nz = r => (((Math.round(r * 180 / Math.PI)) % 360) + 360) % 360;
+      $('angInfo').textContent = S.fp
+        ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° + 補正 ${nz(osOffset())}° ／ 重力推定 ${gAng === null ? '—' : nz(gAng) + '°'}`
         : '';
     }
     $('scaleInfo').textContent = `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`;
