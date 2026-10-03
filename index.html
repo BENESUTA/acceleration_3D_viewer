@@ -48,6 +48,7 @@
     pointer-events:none;max-width:70%}
   .zoombtns{position:absolute;left:10px;bottom:10px;display:flex;gap:6px}
   .zoombtns button{width:36px;height:36px;font-size:18px;line-height:1}
+  .zoombtns button.on{background:var(--acc);color:#05231f;border-color:var(--acc)}
   .guide{position:absolute;right:56px;bottom:8px;font-size:11px;color:var(--muted);pointer-events:none;text-align:right}
 
   button{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);
@@ -116,6 +117,7 @@
         <div class="zoombtns">
           <button id="zin" aria-label="拡大">＋</button>
           <button id="zout" aria-label="縮小">－</button>
+          <button id="zauto" style="width:auto;padding:0 12px;font-size:13px">自動</button>
         </div>
         <div class="guide" id="guide">ドラッグで回転 ／ ホイール・ピンチで拡大縮小 ／ ダブルタップでリセット</div>
       </div>
@@ -169,6 +171,7 @@
           <span id="zoomVal" style="width:52px;text-align:right">×1.00</span>
         </div>
         <label class="chk"><input type="checkbox" id="auto"> 自動スケール（加速度の大きさに合わせる）</label>
+        <p class="hint" id="scaleInfo"></p>
       </div>
 
       <div class="group">
@@ -178,6 +181,7 @@
           <button data-v="fp">一人称（端末軸）</button>
         </div>
         <p class="hint" id="viewHint"></p>
+        <label class="chk"><input type="checkbox" id="follow" checked> 画面の向き（縦横）に追従する</label>
         <div class="seg" id="segProj" style="margin-top:8px">
           <button data-v="persp" class="on">透視投影</button>
           <button data-v="ortho">平行投影</button>
@@ -191,6 +195,7 @@
         <label class="chk"><input type="checkbox" id="shadow" checked> 3平面への射影と垂線</label>
         <label class="chk"><input type="checkbox" id="trail" checked> 軌跡</label>
         <label class="chk"><input type="checkbox" id="orient" checked> 端末の枠と下方向（重力）を表示</label>
+        <label class="chk"><input type="checkbox" id="circle" checked> |a| の断面円（Zの大きさと符号を読む）</label>
         <div class="cbar"></div>
         <div class="cbar-l"><span>−14</span><span>色 = 画面で失われる軸の値</span><span>+14</span></div>
       </div>
@@ -202,7 +207,8 @@
         <p><b>重力あり</b>は加速度計の読み値そのもの。静止していると、重力に抗する力として上向きに約 +9.8 が出ます。<b>なし</b>は重力成分を除いた純粋な動きの加速度です。</p>
         <p><b>Z軸の情報</b>は、色・矢じりの大きさ、床への垂線、3面図（真上・正面・横）、右端のZゲージ、時系列グラフで補います。3面図では各図の見えない軸の値を色と数値で示します。</p>
         <p><b>移動平均</b>は座標系・重力の処理後の値を直近 N サンプルで平均します。</p>
-        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。</p>
+        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。</p>
+        <p><b>断面円</b>は、半径 |a| の球を画面の平面（XY）で切った円です。矢印の先端が円の内側にあるほどZ成分が大きく、円上ならZ≈0です。Zが正なら実線、負なら破線になります。</p>
       </details>
     </aside>
 
@@ -232,8 +238,9 @@ const S = {
   ma: false, maN: 15, ghost: true,
   proj: 'persp', shadow: true, trail: true, flip: false,
   zoom: 1, yaw: -0.62, pitch: 0.45,
-  fp: false, auto: false, orient: true
+  fp: false, auto: false, orient: true, follow: true, circle: true
 };
+let lastScale = 1;
 
 /* ---------- 3x3 行列 (row-major) ---------- */
 const apply  = (R, v) => [R[0]*v[0]+R[1]*v[1]+R[2]*v[2], R[3]*v[0]+R[4]*v[1]+R[5]*v[2], R[6]*v[0]+R[7]*v[1]+R[8]*v[2]];
@@ -346,6 +353,12 @@ async function setSource(v) {
 }
 
 /* ---------- カメラ・色 ---------- */
+function screenAngle() {
+  let a = 0;
+  if (screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
+  else if (typeof window.orientation === 'number') a = window.orientation;
+  return a * Math.PI / 180;
+}
 const fpInertial = () => S.fp && S.frame === 'inertial';
 const depthOf = v => fpInertial() ? applyT(R, v)[2] : v[2];   // 画面の奥行き成分
 let autoR = 8;
@@ -362,9 +375,11 @@ const baseScale = size => S.auto ? size / 2 * 0.72 / autoR : size / 32;
 function makeProj(cx, cy, scale) {
   const fp = S.fp, rot = fpInertial();
   const yaw = fp ? 0 : S.yaw, pitch = fp ? Math.PI / 2 : S.pitch;   // 一人称: 端末の+z側から原点を見る
+  const sAng = fp && S.follow ? screenAngle() : 0, cs2 = Math.cos(sAng), ss2 = Math.sin(sAng);
   const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), D = 45;
   return p => {
     if (rot) p = applyT(R, p);                                       // 世界系→端末系 (カメラを端末に固定)
+    if (sAng) p = [p[0]*cs2 - p[1]*ss2, p[0]*ss2 + p[1]*cs2, p[2]];  // 画面の縦横回転に追従
     const x1 = cyw*p[0] + syw*p[1], y1 = -syw*p[0] + cyw*p[1];
     const u = p[2]*cp + y1*sp, d = y1*cp - p[2]*sp;
     const w = S.proj === 'persp' ? D / Math.max(6, D + d) : 1;
@@ -415,6 +430,7 @@ function drawMain() {
   c.fillStyle = bg; c.fillRect(0, 0, W, H);
 
   const scale = S.zoom * baseScale(Math.min(W - 40, H));
+  lastScale = scale;
   const P = makeProj(W/2 - 16, H/2, scale);
   const E = Math.min(100, Math.max(15, Math.ceil(Math.max(W, H) / 2 / scale / 5) * 5)), step = niceStep(38 / scale), nK = Math.floor(E / step);
   const line = (a, b) => { const p = P(a), q = P(b); c.moveTo(p[0], p[1]); c.lineTo(q[0], q[1]); };
@@ -490,6 +506,19 @@ function drawMain() {
     }
   }
 
+  if (S.circle) {                     // |a| の断面円
+    const mag = Math.hypot(cur[0], cur[1], cur[2]);
+    if (mag > 0.01) {
+      const sc = q => fpInertial() ? apply(R, q) : q;
+      c.beginPath();
+      for (let i = 0; i <= 96; i++) {
+        const t = i / 96 * Math.PI * 2, q = P(sc([mag * Math.cos(t), mag * Math.sin(t), 0]));
+        i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]);
+      }
+      c.setLineDash(depthOf(cur) >= 0 ? [] : [7, 7]); c.lineWidth = 2; c.strokeStyle = 'rgba(80,200,255,.85)';
+      c.stroke(); c.setLineDash([]);
+    }
+  }
   if (showRaw()) {                    // 生データ(薄)
     const Rw = P(raw);
     c.setLineDash([3, 3]); c.strokeStyle = 'rgba(230,238,246,.4)'; c.lineWidth = 1;
@@ -543,6 +572,12 @@ function drawMini(cv, h, v, hid, title, hint) {
   label(c, 'XYZ'[h], W - 14, cy - 5, AXC[h], 11);
   label(c, 'XYZ'[v], cx + 5, 12, AXC[v], 11);
 
+  if (S.circle) {
+    const mag = Math.hypot(cur[0], cur[1], cur[2]);
+    c.beginPath(); c.arc(cx, cy, mag * scale, 0, 7);
+    c.setLineDash(cur[hid] >= 0 ? [] : [6, 6]); c.lineWidth = 1.6; c.strokeStyle = 'rgba(80,200,255,.7)';
+    c.stroke(); c.setLineDash([]);
+  }
   if (S.trail && trail.length > 1) {
     c.lineWidth = 1.5; c.lineCap = 'round';
     for (let i = 1; i < trail.length; i++) {
@@ -620,6 +655,7 @@ function updateTexts() {
     : 'ドラッグで自由に視点を回せます。';
   $('guide').textContent = S.fp ? 'ホイール・ピンチで拡大縮小（視点は端末に固定）' : 'ドラッグで回転 ／ ホイール・ピンチで拡大縮小 ／ ダブルタップでリセット';
   $('views').classList.toggle('dim', S.fp);
+  $('follow').closest('label').classList.toggle('dim', !S.fp);
 }
 function updateMaInfo() {
   const ms = S.maN / Math.max(rate, 1) * 1000;
@@ -634,7 +670,11 @@ seg('segFrame', v => { S.frame = v; clearCalc(); updateTexts(); });
 seg('segGravity', v => { S.gravity = v === 'on'; clearCalc(); updateTexts(); });
 seg('segProj', v => { S.proj = v; });
 seg('segView', v => { S.fp = v === 'fp'; tween = null; clearCalc(); updateTexts(); });
-$('auto').onchange = e => { S.auto = e.target.checked; };
+function setAuto(v) { S.auto = v; $('auto').checked = v; $('zauto').classList.toggle('on', v); }
+$('auto').onchange = e => setAuto(e.target.checked);
+$('zauto').onclick = () => setAuto(!S.auto);
+$('follow').onchange = e => { S.follow = e.target.checked; };
+$('circle').onchange = e => { S.circle = e.target.checked; };
 $('orient').onchange = e => { S.orient = e.target.checked; };
 $('flip').onchange = e => { S.flip = e.target.checked; clearCalc(); };
 $('maOn').onchange = e => { S.ma = e.target.checked; updateTexts(); updateMaInfo(); };
@@ -715,6 +755,7 @@ function loop(now) {
     const mag = Math.hypot(cur[0], cur[1], cur[2]);
     $('rm').textContent = mag.toFixed(2); $('rg').textContent = (mag / G).toFixed(2) + ' g';
     updateMaInfo();
+    $('scaleInfo').textContent = `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`;
     const st = $('status'), tx = $('statusText');
     if (S.source === 'demo') { st.classList.add('live'); tx.textContent = 'デモ ' + rate.toFixed(0) + ' Hz'; }
     else if (gotSensor && performance.now() - gotSensor < 1500) { st.classList.add('live'); tx.textContent = 'センサー受信中 ' + rate.toFixed(0) + ' Hz'; }
