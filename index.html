@@ -251,7 +251,7 @@
         <p><b>重力あり</b>は加速度計の読み値そのもの。静止していると、重力に抗する力として上向きに約 +9.8 が出ます。<b>なし</b>は重力成分を除いた純粋な動きの加速度です。</p>
         <p><b>Z軸の情報</b>は、色・矢じりの大きさ、床への垂線、3面図（真上・正面・横）、右端のZゲージ、時系列グラフで補います。3面図では各図の見えない軸の値を色と数値で示します。</p>
         <p><b>移動平均</b>は座標系・重力の処理後の値を直近 N サンプルで平均します。</p>
-        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。OSの向き情報は端末ごとのずれ（iPadは横向きが標準で90°ずれる）を重力から学習して補正します。手動の角度は「追従」のオン/オフに関係なく適用されます。</p>
+        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。OSの向き情報は端末ごとのずれ（iPadは横向きが標準で、向きの数え方も逆）を重力から学習して補正します。手動の角度は「追従」のオン/オフに関係なく適用されます。</p>
         <p><b>断面円</b>は、半径 |a| の球を画面の平面（XY）で切った円です。矢印の先端が円の内側にあるほどZ成分が大きく、円上ならZ≈0です。Zが正なら実線、負なら破線になります。</p>
       </details>
     </aside>
@@ -408,7 +408,7 @@ async function setSource(v) {
     window.addEventListener('deviceorientation', onOri);
     listening = true;
   }
-  S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; osOff = null; gxy = [0, 0]; autoSign = 1; signEma = 0; resetData();
+  S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; resetOsLearn(); gxy = [0, 0]; autoSign = 1; signEma = 0; resetData();
   srcHint('端末を動かしてみてください。符号は向きセンサーとの比較で自動判定します。向きが逆なら「センサー符号」を手動で切り替えてください。');
 }
 
@@ -419,11 +419,31 @@ function osAngle() {
   else if (typeof window.orientation === 'number') a = window.orientation;
   return a * Math.PI / 180;
 }
-// iPadは横向きが標準で、OSの向き情報がiPhoneと90°ずれる。端末ごとのずれは重力から学習し、学習前はiPadなら270°(-90°)を仮定する(実機: ホームボタンを下にした縦向きでOS報告90°→補正270°で0°になる)
+// OSの向き情報(osAngle)から画面回転を得る式: 回転 = k×OS角 + off。
+// iPadは横向きが標準で、実機ではk=-1, off=90°(縦=OS90°→0°, 横(ホーム右)=OS0°→90°)。iPhoneはk=+1, off=0。
+// 学習前は上の既定値を使い、重力から推定した向きと突き合わせて端末ごとに学習する
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-let osOff = null;
-const osOffset = () => osOff !== null ? osOff : (isIPad ? Math.PI * 1.5 : 0);
-const osAngleFixed = () => osAngle() + osOffset();
+const defK = isIPad ? -1 : 1, defOff = isIPad ? Math.PI / 2 : 0;
+let osK = null, osOff = null, gStable = 0, gLast = null;
+const osMap = {};
+const q4 = r => (((Math.round(r / (Math.PI / 2))) % 4) + 4) % 4;
+const osAngleFixed = () => (osK !== null ? osK : defK) * osAngle() + (osOff !== null ? osOff : defOff);
+function resetOsLearn() { osK = null; osOff = null; gStable = 0; gLast = null; for (const k of Object.keys(osMap)) delete osMap[k]; }
+function learnOs() {
+  if (gAng === null) return;
+  if (gAng === gLast) gStable++; else { gLast = gAng; gStable = 0; return; }
+  if (gStable !== 30) return;                           // 重力推定が約0.5秒安定したときだけ学習
+  const o = q4(osAngle()), g = q4(gAng);
+  osMap[o] = g;
+  const keys = Object.keys(osMap).map(Number);
+  for (const k of [defK, -defK]) {                      // 全ての記録と矛盾しない (k, off) を探す
+    for (let off = 0; off < 4; off++) {
+      if (keys.every(o2 => (((k * o2 + off) % 4) + 4) % 4 === osMap[o2])) { osK = k; osOff = off * Math.PI / 2; return; }
+    }
+  }
+  for (const key of keys) delete osMap[key];            // 矛盾したら最新の1点だけで作り直す
+  osMap[o] = g; osK = defK; osOff = ((((g - defK * o) % 4) + 4) % 4) * Math.PI / 2;
+}
 function screenAngle() {
   const m = S.angMode;
   if (m !== 'auto' && m !== 'os') return (+m) * Math.PI / 180;   // 手動角度は追従のオン/オフに関係なく適用
@@ -438,7 +458,7 @@ function updateGravAngle(I) {
   const need = Math.PI / 2 - Math.atan2(gxy[1], gxy[0]);
   const q = Math.round(need / (Math.PI / 2));
   if (Math.abs(angDiff(need, q * Math.PI / 2)) < 0.61) gAng = (((q % 4) + 4) % 4) * Math.PI / 2;   // 約35°以内で確定(ヒステリシス)
-    osOff = (((Math.round((gAng - osAngle()) / (Math.PI / 2)) % 4) + 4) % 4) * Math.PI / 2;   // OS情報とのずれを学習
+  learnOs();
 }
 const fpInertial = () => S.fp && S.frame === 'inertial';
 const depthOf = v => fpInertial() ? applyT(R, v)[2] : v[2];   // 画面の奥行き成分
@@ -763,7 +783,7 @@ $('follow').onchange = e => { S.follow = e.target.checked; };
 $('angMode').onchange = e => { S.angMode = e.target.value; };
 $('circle').onchange = e => { S.circle = e.target.checked; };
 $('orient').onchange = e => { S.orient = e.target.checked; };
-$('signMode').onchange = e => { S.signMode = e.target.value; clearCalc(); gAng = null; osOff = null; };
+$('signMode').onchange = e => { S.signMode = e.target.value; clearCalc(); gAng = null; resetOsLearn(); };
 $('maOn').onchange = e => { S.ma = e.target.checked; updateTexts(); updateMaInfo(); };
 function setMaN(v) {
   v = Math.max(1, Math.min(200, Math.round(+v) || 1));
@@ -876,7 +896,7 @@ function loop(now) {
     {
       const nz = r => (((Math.round(r * 180 / Math.PI)) % 360) + 360) % 360;
       $('angInfo').textContent = S.fp
-        ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° + 補正 ${nz(osOffset())}° ／ 重力推定 ${gAng === null ? '—' : nz(gAng) + '°'}`
+        ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° → 補正後 ${nz(osAngleFixed())}° ／ 重力推定 ${gAng === null ? '—' : nz(gAng) + '°'}`
         : '';
     }
     $('scaleInfo').textContent = `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`;
