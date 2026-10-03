@@ -156,8 +156,8 @@
         <div class="row">
           <span>重力の符号</span>
           <select id="signMode" aria-label="重力の符号">
+            <option value="normal" selected>そのまま</option>
             <option value="auto">自動判定</option>
-            <option value="normal">そのまま</option>
             <option value="flip">反転</option>
           </select>
         </div>
@@ -224,12 +224,12 @@
           <div class="row">
             <span>回転補正</span>
             <select id="angMode" aria-label="回転補正">
+              <option value="os" selected>OSの向き情報</option>
               <option value="auto">自動（重力から推定）</option>
-              <option value="os">OSの向き情報</option>
-              <option value="0">0°（手動）</option>
-              <option value="90">90°（手動）</option>
-              <option value="180">180°（手動）</option>
-              <option value="270">270°（手動）</option>
+              <option value="0">OS基準 +0°（手動）</option>
+              <option value="90">OS基準 +90°（手動）</option>
+              <option value="180">OS基準 +180°（手動）</option>
+              <option value="270">OS基準 +270°（手動）</option>
             </select>
           </div>
           <p class="hint" id="angInfo"></p>
@@ -259,7 +259,7 @@
         <p><b>重力あり</b>は加速度計の読み値そのもの。静止していると、重力に抗する力として上向きに約 +9.8 が出ます。<b>なし</b>は重力成分を除いた純粋な動きの加速度です。</p>
         <p><b>Z軸の情報</b>は、色・矢じりの大きさ、床への垂線、3面図（真上・正面・横）、右端のZゲージ、時系列グラフで補います。3面図では各図の見えない軸の値を色と数値で示します。</p>
         <p><b>移動平均</b>は座標系・重力の処理後の値を直近 N サンプルで平均します。</p>
-        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。OSの向き情報は端末ごとのずれ（iPadは横向きが標準で、向きの数え方も逆）を重力から学習して補正します。手動の角度は「追従」のオン/オフに関係なく適用されます。</p>
+        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。OSの向き情報は端末ごとのずれ（iPadは横向きが標準で、向きの数え方も逆）を重力から学習して補正します。手動の角度は表示向き（OSの向き）に対する相対補正なので、一度合わせれば縦横どちらでも正しい向きになります（追従オフのときは固定角になります）。</p>
         <p><b>断面円</b>は、半径 |a| の球を画面の平面（XY）で切った円です。矢印の先端が円の内側にあるほどZ成分が大きく、円上ならZ≈0です。Zが正なら実線、負なら破線になります。</p>
       </details>
     </aside>
@@ -288,12 +288,12 @@ const $ = id => document.getElementById(id);
 const S = {
   source: 'demo', frame: 'inertial', gravity: true,
   ma: false, maN: 15, ghost: true,
-  proj: 'persp', shadow: true, trail: true, signMode: 'auto', moveSign: 'normal',
+  proj: 'persp', shadow: true, trail: true, signMode: 'normal', moveSign: 'normal',
   zoom: 1, yaw: -0.62, pitch: 0.45,
   fp: false, auto: false, orient: true, follow: true, circle: true
 };
 let lastScale = 1;
-S.angMode = 'auto';
+S.angMode = 'os';
 let gAng = null, gxy = [0, 0];   // 重力から推定した画面回転(0/90/180/270°)
 
 /* ---------- 3x3 行列 (row-major) ---------- */
@@ -424,7 +424,7 @@ async function setSource(v) {
     listening = true;
   }
   S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; resetOsLearn(); gxy = [0, 0]; autoSign = 1; signEma = 0; resetData();
-  srcHint('端末を動かしてみてください。重力の符号は向きセンサーとの比較で自動判定します。動きの向きが逆なら「動きの符号」を反転してください。');
+  srcHint('端末を動かしてみてください。重力の向きが逆なら「重力の符号」を反転（または自動判定）、動きの向きが逆なら「動きの符号」を反転してください。');
 }
 
 /* ---------- カメラ・色 ---------- */
@@ -461,7 +461,10 @@ function learnOs() {
 }
 function screenAngle() {
   const m = S.angMode;
-  if (m !== 'auto' && m !== 'os') return (+m) * Math.PI / 180;   // 手動角度は追従のオン/オフに関係なく適用
+  if (m !== 'auto' && m !== 'os') {                              // 手動: 表示向き(OS基準)に対する相対補正
+    const man = (+m) * Math.PI / 180;
+    return S.follow ? osAngleFixed() + man : man;                // 追従オフのときは固定角として適用
+  }
   if (!S.follow) return 0;
   if (m === 'auto' && S.source === 'sensor' && gAng !== null) return gAng;
   return osAngleFixed();
