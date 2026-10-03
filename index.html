@@ -71,6 +71,11 @@
   .stage.full .fsbar{top:calc(58px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right))}
   .stage.full .tag{top:calc(10px + env(safe-area-inset-top));left:calc(10px + env(safe-area-inset-left));max-width:calc(100% - 80px)}
   .stage.full .zoombtns{left:calc(10px + env(safe-area-inset-left));bottom:calc(10px + env(safe-area-inset-bottom))}
+  #fsToggle{display:none;position:absolute;right:56px;top:10px;width:40px;height:40px;font-size:18px;line-height:1;padding:0;
+    background:rgba(18,26,36,.85);z-index:3}
+  .stage.full #fsToggle{display:block;top:calc(10px + env(safe-area-inset-top));right:calc(56px + env(safe-area-inset-right))}
+  #fsToggle[aria-pressed="true"]{background:var(--acc);color:#05231f;border-color:var(--acc)}
+  .stage.full.fshide .fsbar,.stage.full.fshide .zoombtns{display:none}      /* 設定ボタン・数値・拡大縮小ボタンをまとめて隠す */
   html.lock,html.lock body{overflow:hidden}
   .guide{position:absolute;right:56px;bottom:8px;font-size:11px;color:var(--muted);pointer-events:none;text-align:right}
 
@@ -159,6 +164,7 @@
         <canvas id="main"></canvas>
         <div class="tag" id="tag"></div>
         <button id="fsBtn" aria-label="全画面表示" title="全画面表示">⛶</button>
+        <button id="fsToggle" aria-label="操作ボタンを隠す" aria-pressed="false" title="操作ボタンの表示/非表示">☰</button>
         <div class="fsbar">
           <button id="fsFrame"></button>
           <button id="fsGrav"></button>
@@ -907,6 +913,12 @@ $('fsFrame').onclick = () => pick('segFrame', S.frame === 'inertial' ? 'body' : 
 $('fsGrav').onclick = () => pick('segGravity', S.gravity ? 'off' : 'on');
 $('fsView').onclick = () => pick('segView', S.fp ? 'free' : 'fp');
 $('fsMa').onclick = () => $('maOn').click();
+$('fsToggle').onclick = () => {            // 全画面中の操作ボタン・数値を隠す/出す
+  const hide = !stageEl.classList.contains('fshide');
+  stageEl.classList.toggle('fshide', hide);
+  $('fsToggle').setAttribute('aria-pressed', String(hide));
+  $('fsToggle').setAttribute('aria-label', hide ? '操作ボタンを表示' : '操作ボタンを隠す');
+};
 $('fsNumMa').onclick = () => $('numMaOn').click();
 
 /* ---------- 数値表示の設定 (数値部分をタップ) ---------- */
