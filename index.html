@@ -154,13 +154,21 @@
           <button data-v="sensor">端末センサー</button>
         </div>
         <div class="row">
-          <span>センサー符号</span>
-          <select id="signMode" aria-label="センサー符号">
+          <span>重力の符号</span>
+          <select id="signMode" aria-label="重力の符号">
             <option value="auto">自動判定</option>
             <option value="normal">そのまま</option>
             <option value="flip">反転</option>
           </select>
         </div>
+        <div class="row">
+          <span>動きの符号</span>
+          <select id="moveSign" aria-label="動きの符号">
+            <option value="normal">そのまま</option>
+            <option value="flip">反転</option>
+          </select>
+        </div>
+        <p class="hint" id="signInfo"></p>
         <p class="hint" id="srcHint">デモは回転しながら動く端末を模擬します。センサーはスマホ・タブレットで HTTPS 配信時に使えます。</p>
       </div>
 
@@ -280,7 +288,7 @@ const $ = id => document.getElementById(id);
 const S = {
   source: 'demo', frame: 'inertial', gravity: true,
   ma: false, maN: 15, ghost: true,
-  proj: 'persp', shadow: true, trail: true, signMode: 'auto',
+  proj: 'persp', shadow: true, trail: true, signMode: 'auto', moveSign: 'normal',
   zoom: 1, yaw: -0.62, pitch: 0.45,
   fp: false, auto: false, orient: true, follow: true, circle: true
 };
@@ -352,7 +360,9 @@ function onOri(e) {
   if (e.alpha == null && e.beta == null && e.gamma == null) return;
   ori = {a: e.alpha || 0, b: e.beta || 0, g: e.gamma || 0, ok: true};
 }
-// 加速度計の符号は環境で逆になる(iOSは仕様と逆)。端末の向きから計算した重力方向と比べて自動判定する
+// 「動き(acceleration)」と「重力成分」は環境によって符号の扱いが別々に逆転しうる(iOSなど)。
+// 重力成分(= 重力込み − 動き)の符号だけを、向きセンサーから計算した重力方向と比べて自動判定する。
+// 動きの符号は判定できないので、そのまま使い、必要なら手動で反転する
 let autoSign = 1, signEma = 0;
 function onMotion(e) {
   if (S.source !== 'sensor') return;
@@ -363,26 +373,31 @@ function onMotion(e) {
   const rawI = hasI ? [ig.x, ig.y, ig.z] : null;
   const rawL = hasL ? [li.x, li.y, li.z] : null;
   if (ori.ok) R = rotFromEuler(ori.a, ori.b, ori.g);
+  else if (rawI) {                    // 向きが取れない場合は重力方向から傾きのみ推定
+    const nrm = Math.hypot(rawI[0], rawI[1], rawI[2]) || 1;
+    R = rotFromEuler(0, Math.asin(Math.max(-1, Math.min(1, rawI[1]/nrm))) * 180/Math.PI, Math.atan2(-rawI[0], rawI[2]) * 180/Math.PI);
+  }
+  const ge = applyT(R, [0, 0, G]);                                  // 向きから求めた重力成分(仕様どおりの符号)
+  let gm;                                                          // センサー自身が示す重力成分
+  if (rawI && rawL) gm = [rawI[0]-rawL[0], rawI[1]-rawL[1], rawI[2]-rawL[2]];
+  else if (rawI) gm = rawI;
+  else gm = ge;
   if (S.signMode === 'auto' && ori.ok && rawI) {
-    const n = Math.hypot(rawI[0], rawI[1], rawI[2]);
+    const n = Math.hypot(gm[0], gm[1], gm[2]);
     if (n > 3) {
-      const gd0 = applyT(R, [0, 0, G]);
-      const dn = (rawI[0]*gd0[0] + rawI[1]*gd0[1] + rawI[2]*gd0[2]) / (n * G);   // 静止時: 正しい符号なら+1
+      const dn = (gm[0]*ge[0] + gm[1]*ge[1] + gm[2]*ge[2]) / (n * G);   // 正しい符号なら+1
       signEma += (dn - signEma) * 0.05;
       if (signEma < -0.3) autoSign = -1; else if (signEma > 0.3) autoSign = 1;
     }
   }
-  const sg = S.signMode === 'flip' ? -1 : S.signMode === 'normal' ? 1 : autoSign;
-  let I = rawI ? rawI.map(v => v * sg) : null;
-  let L = rawL ? rawL.map(v => v * sg) : null;
-  if (!ori.ok && I) {                 // 向きが取れない場合は重力方向から傾きのみ推定
-    const nrm = Math.hypot(I[0], I[1], I[2]) || 1;
-    R = rotFromEuler(0, Math.asin(Math.max(-1, Math.min(1, I[1]/nrm))) * 180/Math.PI, Math.atan2(-I[0], I[2]) * 180/Math.PI);
-  }
-  const gd = applyT(R, [0, 0, G]);
-  if (!I) I = [L[0] + gd[0], L[1] + gd[1], L[2] + gd[2]];
-  if (!L) L = [I[0] - gd[0], I[1] - gd[1], I[2] - gd[2]];
-  updateGravAngle(I);
+  const sgG = S.signMode === 'flip' ? -1 : S.signMode === 'normal' ? 1 : autoSign;
+  const sgM = S.moveSign === 'flip' ? -1 : 1;
+  const onlyI = rawI && !rawL;                                      // 動きが無く重力込みしか来ない場合
+  const Gf = (rawI && !onlyI) ? gm.map(v => v * sgG) : ge;           // 符号を揃えた重力成分
+  const lin = rawL ? rawL : (onlyI ? rawI.map((v, i) => v * sgG - ge[i]) : [0, 0, 0]);
+  const L = lin.map(v => v * sgM);                                  // 動き
+  const I = [L[0] + Gf[0], L[1] + Gf[1], L[2] + Gf[2]];            // 重力込み
+  updateGravAngle(Gf);
   ingest(performance.now(), L, I);
 }
 async function setSource(v) {
@@ -409,7 +424,7 @@ async function setSource(v) {
     listening = true;
   }
   S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; resetOsLearn(); gxy = [0, 0]; autoSign = 1; signEma = 0; resetData();
-  srcHint('端末を動かしてみてください。符号は向きセンサーとの比較で自動判定します。向きが逆なら「センサー符号」を手動で切り替えてください。');
+  srcHint('端末を動かしてみてください。重力の符号は向きセンサーとの比較で自動判定します。動きの向きが逆なら「動きの符号」を反転してください。');
 }
 
 /* ---------- カメラ・色 ---------- */
@@ -783,6 +798,7 @@ $('follow').onchange = e => { S.follow = e.target.checked; };
 $('angMode').onchange = e => { S.angMode = e.target.value; };
 $('circle').onchange = e => { S.circle = e.target.checked; };
 $('orient').onchange = e => { S.orient = e.target.checked; };
+$('moveSign').onchange = e => { S.moveSign = e.target.value; clearCalc(); };
 $('signMode').onchange = e => { S.signMode = e.target.value; clearCalc(); gAng = null; resetOsLearn(); };
 $('maOn').onchange = e => { S.ma = e.target.checked; updateTexts(); updateMaInfo(); };
 function setMaN(v) {
@@ -899,6 +915,7 @@ function loop(now) {
         ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° → 補正後 ${nz(osAngleFixed())}° ／ 重力推定 ${gAng === null ? '—' : nz(gAng) + '°'}`
         : '';
     }
+    $('signInfo').textContent = S.source === 'sensor' ? `重力の判定: 向きセンサーとの一致度 ${signEma.toFixed(2)}（+1で正しい符号）→ ${(S.signMode === 'flip' || (S.signMode === 'auto' && autoSign < 0)) ? '反転して使用' : 'そのまま使用'}` : '';
     $('scaleInfo').textContent = `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`;
     const st = $('status'), tx = $('statusText');
     if (S.source === 'demo') { st.classList.add('live'); tx.textContent = 'デモ ' + rate.toFixed(0) + ' Hz'; }
