@@ -86,6 +86,7 @@
   .row{display:flex;align-items:center;gap:8px;margin-top:8px}
   .row input[type=range]{flex:1;min-width:0}
   input[type=range]{accent-color:var(--acc);height:28px}
+  select{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;flex:1;min-width:0}
   input[type=number]{width:68px;background:var(--bg);color:var(--text);border:1px solid var(--line);
     border-radius:8px;padding:5px 6px;font:inherit}
   .chk{display:flex;align-items:center;gap:8px;margin-top:7px;font-size:13px}
@@ -204,6 +205,20 @@
         </div>
         <p class="hint" id="viewHint"></p>
         <label class="chk"><input type="checkbox" id="follow" checked> 画面の向き（縦横）に追従する</label>
+        <div id="angRow">
+          <div class="row">
+            <span>回転補正</span>
+            <select id="angMode" aria-label="回転補正">
+              <option value="auto">自動（重力から推定）</option>
+              <option value="os">OSの向き情報</option>
+              <option value="0">0°（手動）</option>
+              <option value="90">90°（手動）</option>
+              <option value="180">180°（手動）</option>
+              <option value="270">270°（手動）</option>
+            </select>
+          </div>
+          <p class="hint" id="angInfo"></p>
+        </div>
         <div class="seg" id="segProj" style="margin-top:8px">
           <button data-v="persp" class="on">透視投影</button>
           <button data-v="ortho">平行投影</button>
@@ -229,7 +244,7 @@
         <p><b>重力あり</b>は加速度計の読み値そのもの。静止していると、重力に抗する力として上向きに約 +9.8 が出ます。<b>なし</b>は重力成分を除いた純粋な動きの加速度です。</p>
         <p><b>Z軸の情報</b>は、色・矢じりの大きさ、床への垂線、3面図（真上・正面・横）、右端のZゲージ、時系列グラフで補います。3面図では各図の見えない軸の値を色と数値で示します。</p>
         <p><b>移動平均</b>は座標系・重力の処理後の値を直近 N サンプルで平均します。</p>
-        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。</p>
+        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。「画面の向きに追従」をオンにすると、端末を横向きにしても画面の上下左右に合わせて表示します。回転補正は既定で、加速度計が示す「上」の向きから画面の回転を推定します（OSの向き情報が正しく取れないiPadなど向け）。端末を水平に置いている間は直前の向きを保ちます。合わない場合は「OSの向き情報」や手動の角度を選んでください。</p>
         <p><b>断面円</b>は、半径 |a| の球を画面の平面（XY）で切った円です。矢印の先端が円の内側にあるほどZ成分が大きく、円上ならZ≈0です。Zが正なら実線、負なら破線になります。</p>
       </details>
     </aside>
@@ -263,6 +278,8 @@ const S = {
   fp: false, auto: false, orient: true, follow: true, circle: true
 };
 let lastScale = 1;
+S.angMode = 'auto';
+let gAng = null, gxy = [0, 0];   // 重力から推定した画面回転(0/90/180/270°)
 
 /* ---------- 3x3 行列 (row-major) ---------- */
 const apply  = (R, v) => [R[0]*v[0]+R[1]*v[1]+R[2]*v[2], R[3]*v[0]+R[4]*v[1]+R[5]*v[2], R[6]*v[0]+R[7]*v[1]+R[8]*v[2]];
@@ -345,6 +362,7 @@ function onMotion(e) {
   const gd = applyT(R, [0, 0, G]);
   if (!I) I = [L[0] + gd[0], L[1] + gd[1], L[2] + gd[2]];
   if (!L) L = [I[0] - gd[0], I[1] - gd[1], I[2] - gd[2]];
+  updateGravAngle(I);
   ingest(performance.now(), L, I);
 }
 async function setSource(v) {
@@ -370,16 +388,30 @@ async function setSource(v) {
     window.addEventListener('deviceorientation', onOri);
     listening = true;
   }
-  S.source = 'sensor'; gotSensor = 0; ori.ok = false; resetData();
+  S.source = 'sensor'; gotSensor = 0; ori.ok = false; gAng = null; gxy = [0, 0]; resetData();
   srcHint('端末を動かしてみてください。Z（画面手前）の向きが逆なら「符号を反転」を試してください。');
 }
 
 /* ---------- カメラ・色 ---------- */
-function screenAngle() {
+function osAngle() {
   let a = 0;
   if (screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
   else if (typeof window.orientation === 'number') a = window.orientation;
   return a * Math.PI / 180;
+}
+function screenAngle() {
+  const m = S.angMode;
+  if (m === 'os') return osAngle();
+  if (m === 'auto') return (S.source === 'sensor' && gAng !== null) ? gAng : osAngle();
+  return (+m) * Math.PI / 180;
+}
+// 加速度計が示す「上」の向き(端末XY平面内)から、画面の上下に合わせる回転角を90°単位で推定する
+function updateGravAngle(I) {
+  gxy[0] += (I[0] - gxy[0]) * 0.15; gxy[1] += (I[1] - gxy[1]) * 0.15;
+  if (Math.hypot(gxy[0], gxy[1]) < 4) return;            // 水平に近いときは更新しない
+  const need = Math.PI / 2 - Math.atan2(gxy[1], gxy[0]);
+  const q = Math.round(need / (Math.PI / 2));
+  if (Math.abs(angDiff(need, q * Math.PI / 2)) < 0.61) gAng = (((q % 4) + 4) % 4) * Math.PI / 2;   // 約35°以内で確定(ヒステリシス)
 }
 const fpInertial = () => S.fp && S.frame === 'inertial';
 const depthOf = v => fpInertial() ? applyT(R, v)[2] : v[2];   // 画面の奥行き成分
@@ -682,6 +714,7 @@ function updateTexts() {
   $('fsMa').textContent = '移動平均 ' + (S.ma ? S.maN : '切');
   $('views').classList.toggle('dim', S.fp);
   $('follow').closest('label').classList.toggle('dim', !S.fp);
+  $('angRow').classList.toggle('dim', !S.fp || !S.follow);
 }
 function updateMaInfo() {
   const ms = S.maN / Math.max(rate, 1) * 1000;
@@ -700,6 +733,7 @@ function setAuto(v) { S.auto = v; $('auto').checked = v; $('zauto').classList.to
 $('auto').onchange = e => setAuto(e.target.checked);
 $('zauto').onclick = () => setAuto(!S.auto);
 $('follow').onchange = e => { S.follow = e.target.checked; };
+$('angMode').onchange = e => { S.angMode = e.target.value; };
 $('circle').onchange = e => { S.circle = e.target.checked; };
 $('orient').onchange = e => { S.orient = e.target.checked; };
 $('flip').onchange = e => { S.flip = e.target.checked; clearCalc(); };
@@ -812,6 +846,12 @@ function loop(now) {
     if (isFull) $('fsRead').innerHTML = `X ${fmt(cur[0])}<br>Y ${fmt(cur[1])}<br>Z ${fmt(cur[2])}<br>|a| ${mag.toFixed(2)}`;
     $('rm').textContent = mag.toFixed(2); $('rg').textContent = (mag / G).toFixed(2) + ' g';
     updateMaInfo();
+    {
+      const dg = r => Math.round(r * 180 / Math.PI * 1) % 360, nz = r => ((dg(r) % 360) + 360) % 360;
+      $('angInfo').textContent = S.fp && S.follow
+        ? `適用 ${nz(screenAngle())}° ／ OS報告 ${nz(osAngle())}° ／ 重力推定 ${gAng === null ? '—' : nz(gAng) + '°'}`.replace('°°', '°')
+        : '';
+    }
     $('scaleInfo').textContent = `1 m/s² ≈ ${lastScale.toFixed(1)} px（${S.auto ? '自動' : '固定'}）`;
     const st = $('status'), tx = $('statusText');
     if (S.source === 'demo') { st.classList.add('live'); tx.textContent = 'デモ ' + rate.toFixed(0) + ' Hz'; }
