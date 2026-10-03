@@ -419,10 +419,10 @@ function osAngle() {
   else if (typeof window.orientation === 'number') a = window.orientation;
   return a * Math.PI / 180;
 }
-// iPadは横向きが標準で、OSの向き情報がiPhoneと90°ずれる。端末ごとのずれは重力から学習し、学習前はiPadなら+90°を仮定する
+// iPadは横向きが標準で、OSの向き情報がiPhoneと90°ずれる。端末ごとのずれは重力から学習し、学習前はiPadなら270°(-90°)を仮定する(実機: ホームボタンを下にした縦向きでOS報告90°→補正270°で0°になる)
 const isIPad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 let osOff = null;
-const osOffset = () => osOff !== null ? osOff : (isIPad ? Math.PI / 2 : 0);
+const osOffset = () => osOff !== null ? osOff : (isIPad ? Math.PI * 1.5 : 0);
 const osAngleFixed = () => osAngle() + osOffset();
 function screenAngle() {
   const m = S.angMode;
