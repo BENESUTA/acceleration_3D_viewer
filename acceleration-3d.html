@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>加速度3D表示</title>
+<style>
+  :root{
+    --bg:#0b1016; --panel:#121a24; --panel2:#182230; --line:#263446;
+    --text:#e8eef6; --muted:#8c9db2; --acc:#52d6c6;
+    --x:#ff6b6b; --y:#5fd38d; --z:#5aa9ff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic UI","Meiryo",system-ui,sans-serif;
+    font-size:14px;line-height:1.5;-webkit-text-size-adjust:100%}
+  .app{max-width:1280px;margin:0 auto;padding:12px;padding-top:max(12px,env(safe-area-inset-top))}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+  h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.02em}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap}
+  .pill i{width:8px;height:8px;border-radius:50%;background:#777;display:inline-block}
+  .pill.live i{background:var(--acc);box-shadow:0 0 8px var(--acc)}
+
+  .layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;
+    grid-template-areas:"stage panel" "extras panel";gap:12px;align-items:start}
+  .stage-wrap{grid-area:stage;min-width:0}
+  .panel{grid-area:panel}
+  .extras{grid-area:extras;min-width:0}
+  @media (max-width:900px){
+    .layout{grid-template-columns:minmax(0,1fr);grid-template-areas:"stage" "panel" "extras"}
+  }
+
+  .readout{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:8px}
+  .chip{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 8px;min-width:0}
+  .chip small{display:block;color:var(--muted);font-size:11px}
+  .chip b{font-variant-numeric:tabular-nums;font-size:15px;font-weight:600;white-space:nowrap}
+  .chip.cx b{color:var(--x)} .chip.cy b{color:var(--y)} .chip.cz b{color:var(--z)}
+  .chip.cz{border-color:#2c4a6e;background:#101e30}
+
+  .stage{position:relative;height:clamp(320px,56vh,620px);border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;background:#0a0e13}
+  canvas{display:block;width:100%;height:100%}
+  #main{touch-action:none;cursor:grab}
+  #main:active{cursor:grabbing}
+  .tag{position:absolute;left:10px;top:10px;font-size:12px;color:var(--text);
+    background:rgba(10,14,19,.72);border:1px solid var(--line);border-radius:8px;padding:4px 8px;
+    pointer-events:none;max-width:70%}
+  .zoombtns{position:absolute;left:10px;bottom:10px;display:flex;gap:6px}
+  .zoombtns button{width:36px;height:36px;font-size:18px;line-height:1}
+  .guide{position:absolute;right:56px;bottom:8px;font-size:11px;color:var(--muted);pointer-events:none;text-align:right}
+
+  button{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;cursor:pointer}
+  button:hover{border-color:#3a526c}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+  .minis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+  .mini{aspect-ratio:1/1;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .chart{height:170px;margin-top:8px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .note{color:var(--muted);font-size:12px;margin:6px 2px 0}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 14px 14px}
+  .group{padding:10px 0;border-bottom:1px solid var(--line)}
+  .group:last-child{border-bottom:0}
+  .group h3{margin:0 0 8px;font-size:13px;font-weight:700;color:var(--text)}
+  .seg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:2px;gap:2px}
+  .seg button{flex:1;border:0;background:transparent;color:var(--muted);padding:7px 6px;font-size:13px}
+  .seg button.on{background:var(--acc);color:#05231f;font-weight:700}
+  .hint{color:var(--muted);font-size:12px;margin:6px 0 0}
+  .row{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .row input[type=range]{flex:1;min-width:0}
+  input[type=range]{accent-color:var(--acc);height:28px}
+  input[type=number]{width:68px;background:var(--bg);color:var(--text);border:1px solid var(--line);
+    border-radius:8px;padding:5px 6px;font:inherit}
+  .chk{display:flex;align-items:center;gap:8px;margin-top:7px;font-size:13px}
+  .chk input{width:17px;height:17px;accent-color:var(--acc)}
+  .views{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+  .views button{padding:6px 2px;font-size:12px}
+  .cbar{height:10px;border-radius:5px;margin-top:8px;
+    background:linear-gradient(90deg,#4da3ff,#c8ced6,#ff6b3d)}
+  .cbar-l{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;margin-top:2px}
+  .switch{display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer}
+  .switch input{position:absolute;opacity:0;width:0;height:0}
+  .switch span{width:40px;height:22px;border-radius:11px;background:var(--bg);border:1px solid var(--line);position:relative;transition:background .15s}
+  .switch span::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:var(--muted);transition:transform .15s,background .15s}
+  .switch input:checked + span{background:#1b4a45;border-color:var(--acc)}
+  .switch input:checked + span::after{transform:translateX(18px);background:var(--acc)}
+  .switch input:focus-visible + span{outline:2px solid var(--acc);outline-offset:2px}
+  .dim{opacity:.45}
+  details{margin-top:10px;color:var(--muted);font-size:12.5px}
+  details summary{cursor:pointer;color:var(--text);font-size:13px}
+  details p{margin:6px 0}
+  @media (prefers-reduced-motion:reduce){.switch span,.switch span::after{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>加速度 3D 表示</h1>
+    <span class="pill" id="status"><i></i><span id="statusText">起動中</span></span>
+  </header>
+
+  <div class="layout">
+    <section class="stage-wrap">
+      <div class="readout">
+        <div class="chip cx"><small>X (m/s²)</small><b id="rx">0.00</b></div>
+        <div class="chip cy"><small>Y (m/s²)</small><b id="ry">0.00</b></div>
+        <div class="chip cz"><small>Z (m/s²)</small><b id="rz">0.00</b></div>
+        <div class="chip"><small>大きさ |a|</small><b id="rm">0.00</b></div>
+        <div class="chip"><small>g 換算</small><b id="rg">0.00</b></div>
+      </div>
+      <div class="stage">
+        <canvas id="main"></canvas>
+        <div class="tag" id="tag"></div>
+        <div class="zoombtns">
+          <button id="zin" aria-label="拡大">＋</button>
+          <button id="zout" aria-label="縮小">－</button>
+        </div>
+        <div class="guide" id="guide">ドラッグで回転 ／ ホイール・ピンチで拡大縮小 ／ ダブルタップでリセット</div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="group">
+        <h3>データ源</h3>
+        <div class="seg" id="segSource">
+          <button data-v="demo" class="on">デモ</button>
+          <button data-v="sensor">端末センサー</button>
+        </div>
+        <label class="chk"><input type="checkbox" id="flip"> センサーの符号を反転する</label>
+        <p class="hint" id="srcHint">デモは回転しながら動く端末を模擬します。センサーはスマホ・タブレットで HTTPS 配信時に使えます。</p>
+      </div>
+
+      <div class="group">
+        <h3>座標系</h3>
+        <div class="seg" id="segFrame">
+          <button data-v="inertial" class="on">慣性系</button>
+          <button data-v="body">非慣性系</button>
+        </div>
+        <p class="hint" id="frameHint"></p>
+      </div>
+
+      <div class="group">
+        <h3>重力</h3>
+        <div class="seg" id="segGravity">
+          <button data-v="on" class="on">あり</button>
+          <button data-v="off">なし</button>
+        </div>
+        <p class="hint" id="gravHint"></p>
+      </div>
+
+      <div class="group">
+        <h3>時間の移動平均</h3>
+        <label class="switch"><input type="checkbox" id="maOn"><span></span>移動平均を有効にする</label>
+        <div class="row" id="maRow">
+          <input type="range" id="maRange" min="1" max="200" value="15" aria-label="サンプル長">
+          <input type="number" id="maNum" min="1" max="200" value="15" inputmode="numeric" aria-label="サンプル長">
+          <span>サンプル</span>
+        </div>
+        <p class="hint" id="maInfo"></p>
+        <label class="chk"><input type="checkbox" id="ghost" checked> 平均前の生データも薄く重ねる</label>
+      </div>
+
+      <div class="group">
+        <h3>拡大縮小</h3>
+        <div class="row">
+          <input type="range" id="zoom" min="-1.4" max="1.8" step="0.01" value="0" aria-label="拡大率">
+          <span id="zoomVal" style="width:52px;text-align:right">×1.00</span>
+        </div>
+        <label class="chk"><input type="checkbox" id="auto"> 自動スケール（加速度の大きさに合わせる）</label>
+      </div>
+
+      <div class="group">
+        <h3>表示</h3>
+        <div class="seg" id="segView">
+          <button data-v="free" class="on">自由視点</button>
+          <button data-v="fp">一人称（端末軸）</button>
+        </div>
+        <p class="hint" id="viewHint"></p>
+        <div class="seg" id="segProj" style="margin-top:8px">
+          <button data-v="persp" class="on">透視投影</button>
+          <button data-v="ortho">平行投影</button>
+        </div>
+        <div class="views" id="views">
+          <button data-view="iso">斜め</button>
+          <button data-view="top">真上</button>
+          <button data-view="front">正面</button>
+          <button data-view="side">横</button>
+        </div>
+        <label class="chk"><input type="checkbox" id="shadow" checked> 3平面への射影と垂線</label>
+        <label class="chk"><input type="checkbox" id="trail" checked> 軌跡</label>
+        <label class="chk"><input type="checkbox" id="orient" checked> 端末の枠と下方向（重力）を表示</label>
+        <div class="cbar"></div>
+        <div class="cbar-l"><span>−14</span><span>色 = 画面で失われる軸の値</span><span>+14</span></div>
+      </div>
+
+      <details>
+        <summary>見方・仕組み</summary>
+        <p><b>慣性系</b>：地面に固定した座標系（X=東, Y=北, Z=上）。端末の向きを補正して表示します。</p>
+        <p><b>非慣性系</b>：端末と一緒に動く座標系（x=右, y=上, z=画面手前）。端末が回ると重力の向きも回ります。</p>
+        <p><b>重力あり</b>は加速度計の読み値そのもの。静止していると、重力に抗する力として上向きに約 +9.8 が出ます。<b>なし</b>は重力成分を除いた純粋な動きの加速度です。</p>
+        <p><b>Z軸の情報</b>は、色・矢じりの大きさ、床への垂線、3面図（真上・正面・横）、右端のZゲージ、時系列グラフで補います。3面図では各図の見えない軸の値を色と数値で示します。</p>
+        <p><b>移動平均</b>は座標系・重力の処理後の値を直近 N サンプルで平均します。</p>
+        <p><b>一人称（端末軸）</b>はカメラをスマホに固定し、画面の右=x・上=y・手前=zをセンサー軸に一致させます。慣性系では床グリッドと世界軸が端末の傾きに合わせて回転します。紫の矢印は重力の向き（下）、点線の枠は端末です。</p>
+      </details>
+    </aside>
+
+    <section class="extras">
+      <div class="minis">
+        <div class="mini"><canvas id="mTop"></canvas></div>
+        <div class="mini"><canvas id="mFront"></canvas></div>
+        <div class="mini"><canvas id="mSide"></canvas></div>
+      </div>
+      <div class="chart"><canvas id="chart"></canvas></div>
+      <p class="note">3面図は主画面と同じ拡大率です。時系列グラフは直近6秒（赤=X, 緑=Y, 青=Z, 白点線=大きさ）。</p>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const G = 9.80665;
+const ZR = 14;                       // 色・サイズ表現の基準範囲 (m/s²)
+const TRAIL = 160, HIST_MS = 6000;
+const AXC = ['#ff6b6b', '#5fd38d', '#5aa9ff'];
+const $ = id => document.getElementById(id);
+
+const S = {
+  source: 'demo', frame: 'inertial', gravity: true,
+  ma: false, maN: 15, ghost: true,
+  proj: 'persp', shadow: true, trail: true, flip: false,
+  zoom: 1, yaw: -0.62, pitch: 0.45,
+  fp: false, auto: false, orient: true
+};
+
+/* ---------- 3x3 行列 (row-major) ---------- */
+const apply  = (R, v) => [R[0]*v[0]+R[1]*v[1]+R[2]*v[2], R[3]*v[0]+R[4]*v[1]+R[5]*v[2], R[6]*v[0]+R[7]*v[1]+R[8]*v[2]];
+const applyT = (R, v) => [R[0]*v[0]+R[3]*v[1]+R[6]*v[2], R[1]*v[0]+R[4]*v[1]+R[7]*v[2], R[2]*v[0]+R[5]*v[1]+R[8]*v[2]];
+function rotFromEuler(a, b, g) {      // W3C DeviceOrientation: R = Rz(α)Rx(β)Ry(γ) 端末系→地面系
+  const d = Math.PI / 180;
+  const ca = Math.cos(a*d), sa = Math.sin(a*d), cb = Math.cos(b*d), sb = Math.sin(b*d), cg = Math.cos(g*d), sg = Math.sin(g*d);
+  return [ca*cg - sa*sb*sg, -sa*cb, ca*sg + sa*sb*cg,
+          sa*cg + ca*sb*sg,  ca*cb, sa*sg - ca*sb*cg,
+          -cb*sg,            sb,    cb*cg];
+}
+
+/* ---------- データ状態 ---------- */
+let R = [1,0,0, 0,1,0, 0,0,1];
+let ori = {a:0, b:0, g:0, ok:false};
+let buf = [], trail = [], hist = [];
+let cur = [0,0,G], raw = [0,0,G];
+let rate = 60, lastT = 0, gotSensor = 0;
+
+function resetData() {
+  buf = []; trail = []; hist = [];
+  lastT = 0;
+  demoClock = performance.now();
+}
+
+function ingest(t, linD, inclD) {
+  const base = S.gravity ? inclD : linD;
+  const out = S.frame === 'inertial' ? apply(R, base) : base.slice();
+  raw = out;
+  buf.push(out);
+  const N = S.ma ? S.maN : 1;
+  while (buf.length > Math.max(N, 1)) buf.shift();
+  let sx = 0, sy = 0, sz = 0;
+  for (const b of buf) { sx += b[0]; sy += b[1]; sz += b[2]; }
+  const n = buf.length;
+  cur = [sx/n, sy/n, sz/n];
+  trail.push(cur);
+  if (trail.length > TRAIL) trail.shift();
+  hist.push({t, r: out, f: cur});
+  while (hist.length && hist[0].t < t - HIST_MS - 500) hist.shift();
+  if (lastT) {
+    const dt = t - lastT;
+    if (dt > 0 && dt < 500) rate += (1000 / dt - rate) * 0.05;
+  }
+  lastT = t;
+}
+
+/* ---------- デモ生成 ---------- */
+let demoClock = performance.now(), demoT = 0;
+function demoStep() {
+  const dtms = 1000 / 60;
+  demoClock += dtms; demoT += dtms / 1000;
+  const t = demoT, n = () => (Math.random() - .5) * 1.4;
+  const aw = [4.2*Math.sin(0.9*t) + n(), 3.2*Math.sin(1.37*t + 1) + n(), 2.6*Math.sin(0.6*t + 2) + n()];
+  ori = {a: (t*18) % 360, b: 38*Math.sin(0.43*t), g: 32*Math.sin(0.31*t + 1), ok: true};
+  R = rotFromEuler(ori.a, ori.b, ori.g);
+  ingest(demoClock, applyT(R, aw), applyT(R, [aw[0], aw[1], aw[2] + G]));
+}
+
+/* ---------- センサー ---------- */
+let listening = false;
+function onOri(e) {
+  if (e.alpha == null && e.beta == null && e.gamma == null) return;
+  ori = {a: e.alpha || 0, b: e.beta || 0, g: e.gamma || 0, ok: true};
+}
+function onMotion(e) {
+  if (S.source !== 'sensor') return;
+  const ig = e.accelerationIncludingGravity, li = e.acceleration;
+  const hasI = ig && ig.x != null, hasL = li && li.x != null;
+  if (!hasI && !hasL) return;
+  gotSensor = performance.now();
+  const sg = S.flip ? -1 : 1;
+  let I = hasI ? [ig.x*sg, ig.y*sg, ig.z*sg] : null;
+  let L = hasL ? [li.x*sg, li.y*sg, li.z*sg] : null;
+  if (ori.ok) R = rotFromEuler(ori.a, ori.b, ori.g);
+  else if (I) {                       // 向きが取れない場合は重力方向から傾きのみ推定
+    const nrm = Math.hypot(I[0], I[1], I[2]) || 1;
+    R = rotFromEuler(0, Math.asin(Math.max(-1, Math.min(1, I[1]/nrm))) * 180/Math.PI, Math.atan2(-I[0], I[2]) * 180/Math.PI);
+  }
+  const gd = applyT(R, [0, 0, G]);
+  if (!I) I = [L[0] + gd[0], L[1] + gd[1], L[2] + gd[2]];
+  if (!L) L = [I[0] - gd[0], I[1] - gd[1], I[2] - gd[2]];
+  ingest(performance.now(), L, I);
+}
+async function setSource(v) {
+  if (v === 'demo') { S.source = 'demo'; resetData(); srcHint('デモは回転しながら動く端末を模擬します。'); return; }
+  let ok = true;
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      ok = (await DeviceMotionEvent.requestPermission()) === 'granted';
+    }
+  } catch (err) { ok = false; }
+  try {
+    if (ok && typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      await DeviceOrientationEvent.requestPermission();
+    }
+  } catch (err) {}
+  if (!ok) {
+    S.source = 'demo'; setSeg('segSource', 'demo');
+    srcHint('センサーの使用が許可されませんでした。ブラウザの設定で許可してください。');
+    return;
+  }
+  if (!listening) {
+    window.addEventListener('devicemotion', onMotion);
+    window.addEventListener('deviceorientation', onOri);
+    listening = true;
+  }
+  S.source = 'sensor'; gotSensor = 0; ori.ok = false; resetData();
+  srcHint('端末を動かしてみてください。Z（画面手前）の向きが逆なら「符号を反転」を試してください。');
+}
+
+/* ---------- カメラ・色 ---------- */
+const fpInertial = () => S.fp && S.frame === 'inertial';
+const depthOf = v => fpInertial() ? applyT(R, v)[2] : v[2];   // 画面の奥行き成分
+let autoR = 8;
+function updateAuto() {
+  let tgt = 3;
+  const tEnd = hist.length ? hist[hist.length - 1].t : 0;
+  for (let i = hist.length - 1; i >= 0 && hist[i].t > tEnd - 3000; i--) {
+    const f = hist[i].f; tgt = Math.max(tgt, Math.hypot(f[0], f[1], f[2]));
+    if (showRaw()) { const r = hist[i].r; tgt = Math.max(tgt, Math.hypot(r[0], r[1], r[2])); }
+  }
+  autoR = tgt > autoR ? tgt : autoR + (tgt - autoR) * 0.03;
+}
+const baseScale = size => S.auto ? size / 2 * 0.72 / autoR : size / 32;
+function makeProj(cx, cy, scale) {
+  const fp = S.fp, rot = fpInertial();
+  const yaw = fp ? 0 : S.yaw, pitch = fp ? Math.PI / 2 : S.pitch;   // 一人称: 端末の+z側から原点を見る
+  const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), D = 45;
+  return p => {
+    if (rot) p = applyT(R, p);                                       // 世界系→端末系 (カメラを端末に固定)
+    const x1 = cyw*p[0] + syw*p[1], y1 = -syw*p[0] + cyw*p[1];
+    const u = p[2]*cp + y1*sp, d = y1*cp - p[2]*sp;
+    const w = S.proj === 'persp' ? D / Math.max(6, D + d) : 1;
+    return [cx + x1*scale*w, cy - u*scale*w, d, w];
+  };
+}
+const CN = [77,163,255], CM = [200,206,214], CP = [255,107,61];
+function col(v, a = 1) {
+  const t = Math.max(-1, Math.min(1, v / ZR)), k = Math.abs(t), B = t < 0 ? CN : CP;
+  return `rgba(${(CM[0]+(B[0]-CM[0])*k)|0},${(CM[1]+(B[1]-CM[1])*k)|0},${(CM[2]+(B[2]-CM[2])*k)|0},${a})`;
+}
+function niceStep(minU) {
+  for (const s of [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50]) if (s >= minU) return s;
+  return 100;
+}
+const fmt = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2);
+function arrow(c, x0, y0, x1, y1, color, lw, head) {
+  const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy);
+  if (L < 1.5) return;
+  const ux = dx / L, uy = dy / L, h = Math.min(head, L * 0.7);
+  c.strokeStyle = color; c.fillStyle = color; c.lineWidth = lw; c.lineCap = 'round';
+  c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 - ux*h*0.8, y1 - uy*h*0.8); c.stroke();
+  c.beginPath(); c.moveTo(x1, y1);
+  c.lineTo(x1 - ux*h - uy*h*0.45, y1 - uy*h + ux*h*0.45);
+  c.lineTo(x1 - ux*h + uy*h*0.45, y1 - uy*h - ux*h*0.45);
+  c.closePath(); c.fill();
+}
+function label(c, text, x, y, color, size = 12) {
+  c.font = `600 ${size}px "Hiragino Sans","Noto Sans JP",system-ui,sans-serif`;
+  c.lineWidth = 3; c.strokeStyle = 'rgba(8,12,17,.9)'; c.lineJoin = 'round';
+  c.strokeText(text, x, y); c.fillStyle = color; c.fillText(text, x, y);
+}
+function fit(cv) {
+  const r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(r.width * d)), h = Math.max(1, Math.round(r.height * d));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  return {W: r.width, H: r.height, d};
+}
+const showRaw = () => S.ma && S.maN > 1 && S.ghost;
+
+/* ---------- 主画面 ---------- */
+const mc = $('main'), mctx = mc.getContext('2d');
+function drawMain() {
+  const {W, H, d} = fit(mc), c = mctx;
+  c.setTransform(d, 0, 0, d, 0, 0);
+  const bg = c.createRadialGradient(W/2, H/2, 10, W/2, H/2, Math.max(W, H) * 0.7);
+  bg.addColorStop(0, '#16202c'); bg.addColorStop(1, '#0a0e13');
+  c.fillStyle = bg; c.fillRect(0, 0, W, H);
+
+  const scale = S.zoom * baseScale(Math.min(W - 40, H));
+  const P = makeProj(W/2 - 16, H/2, scale);
+  const E = Math.min(100, Math.max(15, Math.ceil(Math.max(W, H) / 2 / scale / 5) * 5)), step = niceStep(38 / scale), nK = Math.floor(E / step);
+  const line = (a, b) => { const p = P(a), q = P(b); c.moveTo(p[0], p[1]); c.lineTo(q[0], q[1]); };
+
+  if (S.shadow) {                     // 射影先の3平面
+    const planes = [[[-E,-E,0],[E,-E,0],[E,E,0],[-E,E,0], AXC[2]],
+                    [[-E,0,-E],[E,0,-E],[E,0,E],[-E,0,E], AXC[1]],
+                    [[0,-E,-E],[0,E,-E],[0,E,E],[0,-E,E], AXC[0]]];
+    for (const pl of planes) {
+      c.beginPath();
+      pl.slice(0, 4).forEach((q, i) => { const p = P(q); i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1]); });
+      c.closePath(); c.globalAlpha = 0.05; c.fillStyle = pl[4]; c.fill();
+      c.globalAlpha = 0.22; c.strokeStyle = pl[4]; c.lineWidth = 1; c.stroke(); c.globalAlpha = 1;
+    }
+  }
+  c.beginPath(); c.strokeStyle = 'rgba(120,150,190,.16)'; c.lineWidth = 1;
+  for (let k = -nK; k <= nK; k++) { const v = k * step; line([v,-E,0],[v,E,0]); line([-E,v,0],[E,v,0]); }
+  c.stroke();
+
+  for (let a = 0; a < 3; a++) {       // 軸
+    const e = [0,0,0]; e[a] = 1;
+    const neg = e.map(v => v * -E), pos = e.map(v => v * E);
+    c.beginPath(); line(neg, [0,0,0]); c.strokeStyle = AXC[a]; c.globalAlpha = .3; c.lineWidth = 1.2; c.stroke();
+    c.beginPath(); line([0,0,0], pos); c.globalAlpha = .9; c.lineWidth = 1.6; c.stroke(); c.globalAlpha = 1;
+    const lp = P(e.map(v => v * (E + 1.6)));
+    label(c, ['X','Y','Z'][a], lp[0] - 4, lp[1] + 4, AXC[a], 13);
+    for (let k = -nK; k <= nK; k++) {
+      if (!k) continue;
+      const v = k * step, tp = P(e.map(q => q * v));
+      c.globalAlpha = .65; c.fillStyle = AXC[a]; c.font = '10px system-ui,sans-serif';
+      c.fillText(String(+v.toFixed(1)), tp[0] + 4, tp[1] - 3);
+    }
+    c.globalAlpha = 1;
+  }
+
+  if (S.orient) {                     // 端末の枠と重力方向
+    const inertial = S.frame === 'inertial', sc = q => inertial ? apply(R, q) : q;
+    const rw = 3.5, rh = 7.5;
+    const cs = [[-rw,-rh,0],[rw,-rh,0],[rw,rh,0],[-rw,rh,0]].map(q => P(sc(q)));
+    c.beginPath(); cs.forEach((q, i) => i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1])); c.closePath();
+    c.fillStyle = 'rgba(232,238,246,.05)'; c.fill();
+    c.setLineDash([5, 4]); c.strokeStyle = 'rgba(232,238,246,.55)'; c.lineWidth = 1.2; c.stroke(); c.setLineDash([]);
+    const n0 = P(sc([-1.4, rh - 0.9, 0])), n1 = P(sc([1.4, rh - 0.9, 0]));
+    c.beginPath(); c.moveTo(n0[0], n0[1]); c.lineTo(n1[0], n1[1]); c.lineWidth = 2.4; c.stroke();
+    label(c, '端末', cs[1][0] + 6, cs[1][1] + 12, 'rgba(232,238,246,.8)', 11);
+    const o0 = P([0,0,0]), dn = P(inertial ? [0,0,-6] : applyT(R, [0,0,-6]));
+    arrow(c, o0[0], o0[1], dn[0], dn[1], '#c792ea', 2.2, 10);
+    label(c, '下(重力)', dn[0] + 6, dn[1] + 12, '#c792ea', 11);
+  }
+  const O = P([0,0,0]), T = P(cur);
+
+  if (S.shadow) {                     // 3平面への射影と垂線
+    const pj = [[[cur[0], cur[1], 0], AXC[2], 'XY'], [[cur[0], 0, cur[2]], AXC[1], 'XZ'], [[0, cur[1], cur[2]], AXC[0], 'YZ']];
+    for (const [pt, color, name] of pj) {
+      const q = P(pt);
+      c.setLineDash([]); c.strokeStyle = color; c.globalAlpha = .35; c.lineWidth = 1.2;
+      c.beginPath(); c.moveTo(O[0], O[1]); c.lineTo(q[0], q[1]); c.stroke();
+      c.setLineDash([4, 4]); c.globalAlpha = name === 'XY' ? .95 : .6; c.lineWidth = name === 'XY' ? 1.8 : 1.2;
+      c.beginPath(); c.moveTo(T[0], T[1]); c.lineTo(q[0], q[1]); c.stroke();
+      c.setLineDash([]); c.globalAlpha = 1;
+      c.beginPath(); c.arc(q[0], q[1], 4, 0, 7); c.fillStyle = color; c.globalAlpha = .9; c.fill(); c.globalAlpha = 1;
+      label(c, name, q[0] + 7, q[1] + 4, color, 10);
+    }
+  }
+
+  if (S.trail && trail.length > 1) {  // 軌跡
+    c.lineWidth = 1.8; c.lineCap = 'round';
+    let pp = P(trail[0]);
+    for (let i = 1; i < trail.length; i++) {
+      const q = P(trail[i]);
+      c.strokeStyle = col(depthOf(trail[i]), (i / trail.length) * .8);
+      c.beginPath(); c.moveTo(pp[0], pp[1]); c.lineTo(q[0], q[1]); c.stroke(); pp = q;
+    }
+  }
+
+  if (showRaw()) {                    // 生データ(薄)
+    const Rw = P(raw);
+    c.setLineDash([3, 3]); c.strokeStyle = 'rgba(230,238,246,.4)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(O[0], O[1]); c.lineTo(Rw[0], Rw[1]); c.stroke(); c.setLineDash([]);
+    c.beginPath(); c.arc(Rw[0], Rw[1], 3.5, 0, 7); c.stroke();
+  }
+
+  const dz = depthOf(cur), zc = col(dz), zName = fpInertial() ? '端末z' : 'z';             // 加速度ベクトル
+  arrow(c, O[0], O[1], T[0], T[1], zc, 3.2, 13 * T[3]);
+  const rad = Math.max(3, (4.5 + 4 * Math.min(1, Math.abs(dz) / ZR)) * T[3]);
+  c.beginPath(); c.arc(T[0], T[1], rad, 0, 7); c.fillStyle = zc; c.fill();
+  c.lineWidth = 1.5; c.strokeStyle = dz >= 0 ? '#fff' : '#0a0e13'; c.stroke();
+  c.beginPath(); c.arc(O[0], O[1], 3, 0, 7); c.fillStyle = '#e8eef6'; c.fill();
+  label(c, zName + ' ' + fmt(dz), T[0] + rad + 6, T[1] - rad, zc, 12);
+
+  // Zゲージ
+  const gx = W - 22, gy0 = H * 0.12, gy1 = H * 0.88;
+  const gr = Math.max(15, Math.ceil(Math.abs(dz) / 5) * 5);
+  const gy = v => gy1 - (v + gr) / (2 * gr) * (gy1 - gy0);
+  for (let i = 0; i < 40; i++) {
+    const v0 = -gr + (i / 40) * 2 * gr;
+    c.fillStyle = col(v0 + gr / 40); c.fillRect(gx - 4, gy(v0 + 2*gr/40), 8, (gy1 - gy0) / 40 + 1);
+  }
+  c.font = '10px system-ui,sans-serif'; c.textAlign = 'right';
+  for (let v = -gr; v <= gr; v += 5) {
+    c.fillStyle = '#8c9db2'; c.fillRect(gx - 8, gy(v), 4, 1); c.fillText(String(v), gx - 11, gy(v) + 3);
+  }
+  c.textAlign = 'left';
+  if (showRaw()) { c.strokeStyle = 'rgba(230,238,246,.6)'; c.strokeRect(gx - 6, gy(Math.max(-gr, Math.min(gr, depthOf(raw)))) - 2, 12, 4); }
+  const my = gy(Math.max(-gr, Math.min(gr, dz)));
+  c.fillStyle = '#fff'; c.strokeStyle = '#0a0e13'; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(gx + 5, my); c.lineTo(gx + 13, my - 5); c.lineTo(gx + 13, my + 5); c.closePath(); c.stroke(); c.fill();
+  label(c, fpInertial() ? '端末z' : 'Z', gx - 4, gy0 - 8, AXC[2], 12);
+}
+
+/* ---------- 3面図 ---------- */
+function drawMini(cv, h, v, hid, title, hint) {
+  const {W, H, d} = fit(cv), c = cv.getContext('2d');
+  c.setTransform(d, 0, 0, d, 0, 0);
+  c.fillStyle = '#0d131b'; c.fillRect(0, 0, W, H);
+  const scale = S.zoom * baseScale(Math.min(W, H)), cx = W / 2, cy = H / 2;
+  const X = a => cx + a * scale, Y = a => cy - a * scale;
+  const step = niceStep(28 / scale), nx = Math.ceil(cx / scale / step), ny = Math.ceil(cy / scale / step);
+  c.strokeStyle = 'rgba(120,150,190,.15)'; c.lineWidth = 1; c.beginPath();
+  for (let k = -nx; k <= nx; k++) { c.moveTo(X(k*step), 0); c.lineTo(X(k*step), H); }
+  for (let k = -ny; k <= ny; k++) { c.moveTo(0, Y(k*step)); c.lineTo(W, Y(k*step)); }
+  c.stroke();
+  c.lineWidth = 1.4;
+  c.strokeStyle = AXC[h]; c.globalAlpha = .7; c.beginPath(); c.moveTo(0, cy); c.lineTo(W, cy); c.stroke();
+  c.strokeStyle = AXC[v]; c.beginPath(); c.moveTo(cx, 0); c.lineTo(cx, H); c.stroke(); c.globalAlpha = 1;
+  label(c, 'XYZ'[h], W - 14, cy - 5, AXC[h], 11);
+  label(c, 'XYZ'[v], cx + 5, 12, AXC[v], 11);
+
+  if (S.trail && trail.length > 1) {
+    c.lineWidth = 1.5; c.lineCap = 'round';
+    for (let i = 1; i < trail.length; i++) {
+      c.strokeStyle = col(trail[i][hid], (i / trail.length) * .8);
+      c.beginPath(); c.moveTo(X(trail[i-1][h]), Y(trail[i-1][v])); c.lineTo(X(trail[i][h]), Y(trail[i][v])); c.stroke();
+    }
+  }
+  if (showRaw()) {
+    c.setLineDash([3, 3]); c.strokeStyle = 'rgba(230,238,246,.4)'; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(cx, cy); c.lineTo(X(raw[h]), Y(raw[v])); c.stroke(); c.setLineDash([]);
+  }
+  const color = col(cur[hid]);
+  arrow(c, cx, cy, X(cur[h]), Y(cur[v]), color, 2.6, 10);
+  const rad = 3 + 4 * Math.min(1, Math.abs(cur[hid]) / ZR);
+  c.beginPath(); c.arc(X(cur[h]), Y(cur[v]), rad, 0, 7); c.fillStyle = color; c.fill();
+  c.lineWidth = 1.2; c.strokeStyle = cur[hid] >= 0 ? '#fff' : '#0a0e13'; c.stroke();
+
+  label(c, title, 8, 16, '#e8eef6', 12);
+  c.textAlign = 'right';
+  label(c, 'XYZ'[hid] + ' ' + fmt(cur[hid]), W - 8, H - 8, color, 13);
+  label(c, hint, W - 8, H - 24, '#8c9db2', 10);
+  c.textAlign = 'left';
+}
+
+/* ---------- 時系列 ---------- */
+const cc = $('chart');
+function drawChart() {
+  const {W, H, d} = fit(cc), c = cc.getContext('2d');
+  c.setTransform(d, 0, 0, d, 0, 0);
+  c.fillStyle = '#0d131b'; c.fillRect(0, 0, W, H);
+  const L = 34, tEnd = hist.length ? hist[hist.length - 1].t : performance.now();
+  let m = 5;
+  for (const p of hist) for (let i = 0; i < 3; i++) m = Math.max(m, Math.abs(p.f[i]), showRaw() ? Math.abs(p.r[i]) : 0);
+  m = Math.ceil(m / 5) * 5;
+  const X = t => L + (t - (tEnd - HIST_MS)) / HIST_MS * (W - L - 6), Y = v => H / 2 - v / m * (H / 2 - 12);
+  c.font = '10px system-ui,sans-serif'; c.lineWidth = 1;
+  for (const v of [-m, -m / 2, 0, m / 2, m]) {
+    c.strokeStyle = v === 0 ? 'rgba(160,180,210,.4)' : 'rgba(120,150,190,.15)';
+    c.beginPath(); c.moveTo(L, Y(v)); c.lineTo(W - 4, Y(v)); c.stroke();
+    c.fillStyle = '#8c9db2'; c.textAlign = 'right'; c.fillText(String(v), L - 4, Y(v) + 3);
+  }
+  c.textAlign = 'left';
+  const series = (get, color, alpha, lw, dash) => {
+    if (hist.length < 2) return;
+    c.beginPath(); c.setLineDash(dash || []); c.strokeStyle = color; c.globalAlpha = alpha; c.lineWidth = lw;
+    hist.forEach((p, i) => { const x = X(p.t), y = Y(get(p)); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+    c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
+  };
+  if (showRaw()) for (let i = 0; i < 3; i++) series(p => p.r[i], AXC[i], .28, 1);
+  for (let i = 0; i < 3; i++) series(p => p.f[i], AXC[i], 1, 1.8);
+  series(p => Math.hypot(p.f[0], p.f[1], p.f[2]), '#e8eef6', .7, 1.2, [4, 3]);
+}
+
+/* ---------- UI ---------- */
+function setSeg(id, v) { [...$(id).children].forEach(b => b.classList.toggle('on', b.dataset.v === v)); }
+function seg(id, cb) {
+  $(id).addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    setSeg(id, b.dataset.v); cb(b.dataset.v);
+  });
+}
+function srcHint(t) { $('srcHint').textContent = t; }
+function updateTexts() {
+  $('frameHint').textContent = S.frame === 'inertial'
+    ? '地面に固定した座標系 (X=東, Y=北, Z=上)。端末の向きを補正します。'
+    : '端末と一緒に動く座標系 (x=右, y=上, z=画面手前)。端末の回転で重力の向きも回ります。';
+  $('gravHint').textContent = S.gravity
+    ? '加速度計の読み値そのもの。静止時は上向きに約 +9.8 m/s² が出ます。'
+    : '重力成分を除いた、動きによる加速度だけを表示します。';
+  $('tag').textContent = (S.frame === 'inertial' ? '慣性系(地面固定)' : '非慣性系(端末固定)') +
+    ' ／ 重力' + (S.gravity ? 'あり' : 'なし') + (S.ma ? ` ／ 移動平均 ${S.maN}` : '') + (S.fp ? ' ／ 一人称' : '');
+  $('maRow').classList.toggle('dim', !S.ma);
+  $('viewHint').textContent = S.fp
+    ? 'カメラを端末に固定。画面の右=x・上=y・手前=z がセンサー軸と一致します。' + (S.frame === 'inertial' ? '慣性系では床グリッドと世界軸が端末の傾きに合わせて回ります。' : '')
+    : 'ドラッグで自由に視点を回せます。';
+  $('guide').textContent = S.fp ? 'ホイール・ピンチで拡大縮小（視点は端末に固定）' : 'ドラッグで回転 ／ ホイール・ピンチで拡大縮小 ／ ダブルタップでリセット';
+  $('views').classList.toggle('dim', S.fp);
+}
+function updateMaInfo() {
+  const ms = S.maN / Math.max(rate, 1) * 1000;
+  $('maInfo').textContent = S.ma
+    ? `直近 ${S.maN} サンプルを平均 (約 ${ms.toFixed(0)} ms ／ 現在 ${rate.toFixed(0)} Hz)`
+    : '無効：生の値をそのまま表示します。';
+}
+function clearCalc() { buf = []; trail = []; }
+
+seg('segSource', v => setSource(v));
+seg('segFrame', v => { S.frame = v; clearCalc(); updateTexts(); });
+seg('segGravity', v => { S.gravity = v === 'on'; clearCalc(); updateTexts(); });
+seg('segProj', v => { S.proj = v; });
+seg('segView', v => { S.fp = v === 'fp'; tween = null; clearCalc(); updateTexts(); });
+$('auto').onchange = e => { S.auto = e.target.checked; };
+$('orient').onchange = e => { S.orient = e.target.checked; };
+$('flip').onchange = e => { S.flip = e.target.checked; clearCalc(); };
+$('maOn').onchange = e => { S.ma = e.target.checked; updateTexts(); updateMaInfo(); };
+function setMaN(v) {
+  v = Math.max(1, Math.min(200, Math.round(+v) || 1));
+  S.maN = v; $('maRange').value = v; $('maNum').value = v; updateTexts(); updateMaInfo();
+}
+$('maRange').oninput = e => setMaN(e.target.value);
+$('maNum').onchange = e => setMaN(e.target.value);
+$('ghost').onchange = e => { S.ghost = e.target.checked; };
+$('shadow').onchange = e => { S.shadow = e.target.checked; };
+$('trail').onchange = e => { S.trail = e.target.checked; };
+
+/* ズーム */
+function setZoom(z) {
+  S.zoom = Math.max(0.25, Math.min(6, z));
+  $('zoom').value = Math.log(S.zoom).toFixed(3);
+  $('zoomVal').textContent = '×' + S.zoom.toFixed(2);
+}
+$('zoom').oninput = e => setZoom(Math.exp(+e.target.value));
+$('zin').onclick = () => setZoom(S.zoom * 1.25);
+$('zout').onclick = () => setZoom(S.zoom / 1.25);
+
+/* 視点 */
+let tween = null;
+const VIEWS = {iso: [-0.62, 0.45], top: [0, Math.PI / 2], front: [0, 0], side: [Math.PI / 2, 0]};
+document.querySelector('.views').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || S.fp) return;
+  tween = {yaw: VIEWS[b.dataset.view][0], pitch: VIEWS[b.dataset.view][1]};
+});
+const angDiff = (a, b) => { let d = b - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+
+/* ポインター操作 */
+const ptrs = new Map(); let pinch0 = 0, zoom0 = 1;
+mc.addEventListener('pointerdown', e => {
+  mc.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY}); tween = null;
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); zoom0 = S.zoom; }
+});
+mc.addEventListener('pointermove', e => {
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (ptrs.size === 1 && !S.fp) {
+    S.yaw -= dx * 0.008;
+    S.pitch = Math.max(-1.2, Math.min(Math.PI / 2, S.pitch + dy * 0.008));
+  } else if (ptrs.size === 2 && pinch0 > 0) {
+    const [a, b] = [...ptrs.values()];
+    setZoom(zoom0 * Math.hypot(a.x - b.x, a.y - b.y) / pinch0);
+  }
+});
+const endPtr = e => { ptrs.delete(e.pointerId); pinch0 = 0; };
+mc.addEventListener('pointerup', endPtr); mc.addEventListener('pointercancel', endPtr);
+mc.addEventListener('wheel', e => { e.preventDefault(); setZoom(S.zoom * Math.exp(-e.deltaY * 0.0015)); }, {passive: false});
+mc.addEventListener('dblclick', () => { setZoom(1); tween = {yaw: VIEWS.iso[0], pitch: VIEWS.iso[1]}; });
+
+/* ---------- ループ ---------- */
+let last = performance.now(), acc = 0, frameNo = 0;
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (S.source === 'demo') {
+    acc += dt;
+    while (acc >= 1 / 60) { demoStep(); acc -= 1 / 60; }
+  }
+  if (tween) {
+    const dy = angDiff(S.yaw, tween.yaw), dp = tween.pitch - S.pitch;
+    S.yaw += dy * 0.18; S.pitch += dp * 0.18;
+    if (Math.abs(dy) < 0.002 && Math.abs(dp) < 0.002) { S.yaw = tween.yaw; S.pitch = tween.pitch; tween = null; }
+  }
+  updateAuto();
+  drawMain();
+  drawMini($('mTop'), 0, 1, 2, '真上 (XY)', 'Z:+が手前');
+  drawMini($('mFront'), 0, 2, 1, '正面 (XZ)', 'Y:+が奥');
+  drawMini($('mSide'), 1, 2, 0, '横 (YZ)', 'X:+が手前');
+  drawChart();
+  if (++frameNo % 6 === 0) {
+    $('rx').textContent = fmt(cur[0]); $('ry').textContent = fmt(cur[1]); $('rz').textContent = fmt(cur[2]);
+    const mag = Math.hypot(cur[0], cur[1], cur[2]);
+    $('rm').textContent = mag.toFixed(2); $('rg').textContent = (mag / G).toFixed(2) + ' g';
+    updateMaInfo();
+    const st = $('status'), tx = $('statusText');
+    if (S.source === 'demo') { st.classList.add('live'); tx.textContent = 'デモ ' + rate.toFixed(0) + ' Hz'; }
+    else if (gotSensor && performance.now() - gotSensor < 1500) { st.classList.add('live'); tx.textContent = 'センサー受信中 ' + rate.toFixed(0) + ' Hz'; }
+    else { st.classList.remove('live'); tx.textContent = 'センサー信号なし (PCではデモを使用)'; }
+  }
+  requestAnimationFrame(loop);
+}
+setZoom(1); updateTexts(); updateMaInfo();
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
